@@ -28,6 +28,7 @@ import {
   ChevronDown,
   PlusCircle,
   RefreshCw,
+  Maximize2,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -51,10 +52,14 @@ interface EditorModalProps {
 interface EditorHistorySnapshot {
   objects: AnnotationObject[];
   bgSrc: string;
+  canvasWidth: number;
+  canvasHeight: number;
 }
 
+type ResizeHandleType = "nw" | "ne" | "se" | "sw" | "n" | "s" | "e" | "w";
+
 const COLORS = [
-  "#FFDE2A", // Brand Bright Yellow
+  "#FFDE2A", // Brand Yellow
   "#EF4444", // Red
   "#F97316", // Orange
   "#EAB308", // Yellow
@@ -68,7 +73,6 @@ const COLORS = [
 ];
 
 const STROKE_WIDTHS = [2, 4, 6, 8, 12];
-
 const overlayImageCache = new Map<string, HTMLImageElement>();
 
 export const EditorModal: React.FC<EditorModalProps> = ({
@@ -88,14 +92,20 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [showBottomDock, setShowBottomDock] = useState<boolean>(true);
 
+  // Canvas size state (can be expanded to arrange/merge multiple images side-by-side)
+  const [canvasDim, setCanvasDim] = useState<{ width: number; height: number }>({ width: 800, height: 600 });
+
   const [objects, setObjects] = useState<AnnotationObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Full history stack supporting Undo/Redo of both annotations AND crops
+  // Cursor state based on hover over handles
+  const [cursorStyle, setCursorStyle] = useState<string>("default");
+
+  // Full history stack supporting Undo/Redo of annotations, crops, and resize
   const [history, setHistory] = useState<EditorHistorySnapshot[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  // Text Box Editor State (placed at dragged rectangle)
+  // Text Box Editor State
   const [textBoxEditor, setTextBoxEditor] = useState<{
     visible: boolean;
     x: number;
@@ -133,8 +143,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Interaction refs
   const isDrawingRef = useRef(false);
   const isDraggingObjectRef = useRef(false);
+  const isResizingRef = useRef(false);
+  const activeHandleRef = useRef<ResizeHandleType | null>(null);
+  const resizeInitialObjRef = useRef<AnnotationObject | null>(null);
+  const resizeStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
   const dragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragInitialObjRef = useRef<AnnotationObject | null>(null);
   const startPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -164,6 +181,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             setBgImage(img);
             originalDataUrlRef.current = dataUrl;
             currentBgSrcRef.current = dataUrl;
+            setCanvasDim({ width: img.naturalWidth, height: img.naturalHeight });
           }
         };
 
@@ -174,7 +192,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           const project: AnnotationProject = JSON.parse(jsonStr);
           if (isMounted && project.objects) {
             setObjects(project.objects);
-            setHistory([{ objects: project.objects, bgSrc: dataUrl }]);
+            setHistory([
+              {
+                objects: project.objects,
+                bgSrc: dataUrl,
+                canvasWidth: project.canvasWidth || 800,
+                canvasHeight: project.canvasHeight || 600,
+              },
+            ]);
             setHistoryIndex(0);
 
             for (const obj of project.objects) {
@@ -192,7 +217,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           }
         } else {
           setObjects([]);
-          setHistory([{ objects: [], bgSrc: dataUrl }]);
+          setHistory([
+            {
+              objects: [],
+              bgSrc: dataUrl,
+              canvasWidth: record.width || 800,
+              canvasHeight: record.height || 600,
+            },
+          ]);
           setHistoryIndex(0);
           setStepCounter(1);
         }
@@ -205,20 +237,24 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [record.id, record.originalPath, record.projectPath]);
+  }, [record.id, record.originalPath, record.projectPath, record.width, record.height]);
 
   // Push new state to undo/redo history
-  const pushState = useCallback((newObjects: AnnotationObject[], newBgSrc?: string) => {
+  const pushState = useCallback((newObjects: AnnotationObject[], newBgSrc?: string, newDim?: { width: number; height: number }) => {
     const activeBgSrc = newBgSrc || currentBgSrcRef.current;
+    const activeDim = newDim || canvasDim;
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push({
       objects: newObjects,
       bgSrc: activeBgSrc,
+      canvasWidth: activeDim.width,
+      canvasHeight: activeDim.height,
     });
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
     setObjects(newObjects);
-  }, [history, historyIndex]);
+    if (newDim) setCanvasDim(newDim);
+  }, [history, historyIndex, canvasDim]);
 
   // Control + Z (Undo)
   const handleUndo = useCallback(() => {
@@ -228,8 +264,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setHistoryIndex(nextIdx);
       setObjects(targetSnapshot.objects);
       setSelectedId(null);
+      setCanvasDim({ width: targetSnapshot.canvasWidth, height: targetSnapshot.canvasHeight });
 
-      // Revert background image if crop changed
       if (targetSnapshot.bgSrc && targetSnapshot.bgSrc !== currentBgSrcRef.current) {
         const revertImg = new Image();
         revertImg.src = targetSnapshot.bgSrc;
@@ -250,6 +286,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setHistoryIndex(nextIdx);
       setObjects(targetSnapshot.objects);
       setSelectedId(null);
+      setCanvasDim({ width: targetSnapshot.canvasWidth, height: targetSnapshot.canvasHeight });
 
       if (targetSnapshot.bgSrc && targetSnapshot.bgSrc !== currentBgSrcRef.current) {
         const revertImg = new Image();
@@ -279,7 +316,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [objects.length, pushState]);
 
-  // Reset to original uncropped image
+  // Expand canvas to fit all images/annotations comfortably
+  const handleExpandCanvas = (extraW: number, extraH: number) => {
+    const newW = canvasDim.width + extraW;
+    const newH = canvasDim.height + extraH;
+    setCanvasDim({ width: newW, height: newH });
+    pushState(objects, undefined, { width: newW, height: newH });
+  };
+
+  // Revert back to original uncropped image
   const handleRevertToOriginal = () => {
     if (!originalDataUrlRef.current) return;
     const img = new Image();
@@ -288,7 +333,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setBgImage(img);
       currentBgSrcRef.current = originalDataUrlRef.current;
       setIsCropped(false);
-      pushState(objects, originalDataUrlRef.current);
+      const newDim = { width: img.naturalWidth, height: img.naturalHeight };
+      setCanvasDim(newDim);
+      pushState(objects, originalDataUrlRef.current, newDim);
     };
   };
 
@@ -362,8 +409,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const project: AnnotationProject = {
       version: 1,
       captureId: record.id,
-      canvasWidth: bgImage.naturalWidth,
-      canvasHeight: bgImage.naturalHeight,
+      canvasWidth: canvasDim.width,
+      canvasHeight: canvasDim.height,
       objects,
     };
 
@@ -379,9 +426,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     } catch (err) {
       console.error("Failed to save project:", err);
     }
-  }, [bgImage, record, objects, onUpdateRecord]);
+  }, [bgImage, record, canvasDim, objects, onUpdateRecord]);
 
-  // Insert image overlay onto canvas (From paste, drag-and-drop, or + button)
+  // Insert image overlay onto canvas with auto-expansion if needed
   const insertImageOverlay = useCallback(async (filePathOrBase64: string, dropX?: number, dropY?: number) => {
     let base64Data = filePathOrBase64;
     if (!filePathOrBase64.startsWith("data:image")) {
@@ -398,22 +445,27 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     img.onload = () => {
       overlayImageCache.set(base64Data, img);
 
-      const maxDimension = 360;
+      // Default size
       let w = img.naturalWidth || 300;
       let h = img.naturalHeight || 200;
-
-      if (w > maxDimension || h > maxDimension) {
-        const ratio = Math.min(maxDimension / w, maxDimension / h);
+      const maxDim = 450;
+      if (w > maxDim || h > maxDim) {
+        const ratio = Math.min(maxDim / w, maxDim / h);
         w = Math.round(w * ratio);
         h = Math.round(h * ratio);
       }
 
-      const canvas = canvasRef.current;
-      const canvasW = canvas?.width || 800;
-      const canvasH = canvas?.height || 600;
+      let curW = canvasDim.width;
+      let curH = canvasDim.height;
 
-      let posX = dropX !== undefined ? Math.max(10, Math.min(canvasW - w - 10, dropX)) : Math.round((canvasW - w) / 2);
-      let posY = dropY !== undefined ? Math.max(10, Math.min(canvasH - h - 10, dropY)) : Math.round((canvasH - h) / 2);
+      let posX = dropX !== undefined ? dropX : Math.round((curW - w) / 2);
+      let posY = dropY !== undefined ? dropY : Math.round((curH - h) / 2);
+
+      // Expand canvas if dropped outside
+      let nextW = curW;
+      let nextH = curH;
+      if (posX + w > nextW) nextW = posX + w + 40;
+      if (posY + h > nextH) nextH = posY + h + 40;
 
       const newId = `img_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
       const imgObj: ImageOverlayObject = {
@@ -426,11 +478,17 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         src: base64Data,
       };
 
-      pushState([...objects, imgObj]);
+      if (nextW !== curW || nextH !== curH) {
+        setCanvasDim({ width: nextW, height: nextH });
+        pushState([...objects, imgObj], undefined, { width: nextW, height: nextH });
+      } else {
+        pushState([...objects, imgObj]);
+      }
+
       setSelectedId(newId);
       setActiveTool("select");
     };
-  }, [objects, pushState]);
+  }, [objects, canvasDim, pushState]);
 
   // Global Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+C, Ctrl+V, Delete)
   useEffect(() => {
@@ -534,15 +592,18 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    if (canvas.width !== bgImage.naturalWidth || canvas.height !== bgImage.naturalHeight) {
-      canvas.width = bgImage.naturalWidth;
-      canvas.height = bgImage.naturalHeight;
+    if (canvas.width !== canvasDim.width || canvas.height !== canvasDim.height) {
+      canvas.width = canvasDim.width;
+      canvas.height = canvasDim.height;
     }
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#09090b";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw background image
     ctx.drawImage(bgImage, 0, 0);
 
     const allObjects = [...objects];
@@ -564,7 +625,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (isCropMode && cropRect && cropRect.w > 0 && cropRect.h > 0) {
       drawCropOverlay(ctx, cropRect, canvas.width, canvas.height);
     }
-  }, [bgImage, objects, selectedId, isCropMode, cropRect]);
+  }, [bgImage, canvasDim, objects, selectedId, isCropMode, cropRect]);
 
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -583,6 +644,35 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       const obj = objects[i];
       if (isPointInsideObject(x, y, obj)) {
         return obj;
+      }
+    }
+    return null;
+  };
+
+  // Check if click/hover is on a resize handle of the selected object
+  const hitTestHandle = (x: number, y: number, obj: AnnotationObject): ResizeHandleType | null => {
+    const bounds = getObjectBoundingBox(obj);
+    const pad = 6;
+    const bx = bounds.minX - pad;
+    const by = bounds.minY - pad;
+    const bw = bounds.maxX - bounds.minX + pad * 2;
+    const bh = bounds.maxY - bounds.minY + pad * 2;
+
+    const handleRadius = 8;
+    const handles: { type: ResizeHandleType; cx: number; cy: number }[] = [
+      { type: "nw", cx: bx, cy: by },
+      { type: "ne", cx: bx + bw, cy: by },
+      { type: "se", cx: bx + bw, cy: by + bh },
+      { type: "sw", cx: bx, cy: by + bh },
+      { type: "n", cx: bx + bw / 2, cy: by },
+      { type: "s", cx: bx + bw / 2, cy: by + bh },
+      { type: "w", cx: bx, cy: by + bh / 2 },
+      { type: "e", cx: bx + bw, cy: by + bh / 2 },
+    ];
+
+    for (const h of handles) {
+      if (Math.hypot(x - h.cx, y - h.cy) <= handleRadius) {
+        return h.type;
       }
     }
     return null;
@@ -613,6 +703,22 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
 
     if (activeTool === "select") {
+      // 1. Check if clicking on resize handle of currently selected object
+      if (selectedId) {
+        const selObj = objects.find((o) => o.id === selectedId);
+        if (selObj) {
+          const handle = hitTestHandle(x, y, selObj);
+          if (handle) {
+            isResizingRef.current = true;
+            activeHandleRef.current = handle;
+            resizeInitialObjRef.current = JSON.parse(JSON.stringify(selObj));
+            resizeStartPosRef.current = { x, y };
+            return;
+          }
+        }
+      }
+
+      // 2. Check if clicking inside another object
       const hit = hitTestObject(x, y);
       if (hit) {
         setSelectedId(hit.id);
@@ -744,6 +850,20 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { x, y } = getCanvasCoords(e);
 
+    // Update dynamic hover cursor for handles
+    if (activeTool === "select" && selectedId && !isResizingRef.current && !isDraggingObjectRef.current) {
+      const selObj = objects.find((o) => o.id === selectedId);
+      if (selObj) {
+        const handle = hitTestHandle(x, y, selObj);
+        if (handle === "nw" || handle === "se") setCursorStyle("nwse-resize");
+        else if (handle === "ne" || handle === "sw") setCursorStyle("nesw-resize");
+        else if (handle === "n" || handle === "s") setCursorStyle("ns-resize");
+        else if (handle === "e" || handle === "w") setCursorStyle("ew-resize");
+        else if (isPointInsideObject(x, y, selObj)) setCursorStyle("move");
+        else setCursorStyle("default");
+      }
+    }
+
     if (isCropMode && isDrawingRef.current) {
       const start = startPosRef.current;
       setCropRect({
@@ -755,6 +875,23 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
+    // Handle Object Resizing (Smooth transform with handles)
+    if (isResizingRef.current && selectedId && resizeInitialObjRef.current && activeHandleRef.current) {
+      const dx = x - resizeStartPosRef.current.x;
+      const dy = y - resizeStartPosRef.current.y;
+      const initial = resizeInitialObjRef.current;
+      const handle = activeHandleRef.current;
+
+      setObjects((prev) =>
+        prev.map((obj) => {
+          if (obj.id !== selectedId) return obj;
+          return resizeObjectFromOrigin(initial, handle, dx, dy);
+        })
+      );
+      return;
+    }
+
+    // Handle Object Dragging / Moving
     if (isDraggingObjectRef.current && selectedId && dragInitialObjRef.current) {
       const dx = x - dragStartPosRef.current.x;
       const dy = y - dragStartPosRef.current.y;
@@ -794,7 +931,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (canvas && bgImage) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#09090b";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(bgImage, 0, 0);
         for (const obj of [...objects, temp]) {
           drawAnnotationObject(ctx, obj, bgImage);
@@ -806,6 +944,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isCropMode) {
       isDrawingRef.current = false;
+      return;
+    }
+
+    if (isResizingRef.current) {
+      isResizingRef.current = false;
+      activeHandleRef.current = null;
+      resizeInitialObjRef.current = null;
+      pushState(objects);
       return;
     }
 
@@ -922,11 +1068,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       currentBgSrcRef.current = croppedDataUrl;
       setIsCropped(true);
 
+      const newDim = { width: cropCanvas.width, height: cropCanvas.height };
+      setCanvasDim(newDim);
+
       const shiftedObjects = objects
         .map((obj) => moveObjectFromOrigin(obj, -Math.round(cropRect.x), -Math.round(cropRect.y)))
         .filter((obj) => isObjectInsideBounds(obj, cropCanvas.width, cropCanvas.height));
 
-      pushState(shiftedObjects, croppedDataUrl);
+      pushState(shiftedObjects, croppedDataUrl, newDim);
       setIsCropMode(false);
       setCropRect(null);
     };
@@ -1023,7 +1172,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               setIsCropMode(false);
             }}
             icon={<MousePointer className="w-4 h-4" />}
-            label="Select & Move (V)"
+            label="Select, Move & Resize with Handles (V)"
           />
           <ToolButton
             active={activeTool === "pen" && !isCropMode}
@@ -1127,6 +1276,16 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <span>Uncrop</span>
             </button>
           )}
+
+          {/* Expand Canvas Button */}
+          <button
+            onClick={() => handleExpandCanvas(300, 200)}
+            className="p-1.5 px-2 rounded-lg bg-zinc-800 text-sky-400 hover:bg-sky-500/20 text-xs flex items-center gap-1 font-medium transition-colors border border-zinc-700"
+            title="Expand Canvas Workspace (Mở rộng thêm không gian ghép ảnh)"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span>+ Canvas</span>
+          </button>
 
           <div className="h-5 w-px bg-zinc-800 mx-1" />
 
@@ -1356,7 +1515,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
         )}
 
-        {/* Text Box Modal Editor (Appears when dragging a text box) */}
+        {/* Text Box Modal Editor */}
         {textBoxEditor.visible && (
           <div className="absolute top-6 z-30 bg-zinc-900/95 border border-amber-500/80 p-3 rounded-xl shadow-2xl flex flex-col gap-2 min-w-[340px] animate-in slide-in-from-top-2">
             <div className="flex items-center justify-between text-xs text-zinc-300">
@@ -1460,13 +1619,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                 e.dataTransfer.dropEffect = "copy";
               }}
               onDrop={handleDropOnCanvas}
-              className={`shadow-2xl border border-zinc-800/80 rounded-lg max-w-none ${
-                isCropMode || activeTool === "eyedropper"
-                  ? "cursor-crosshair"
-                  : activeTool === "select"
-                  ? "cursor-default"
-                  : "cursor-crosshair"
-              }`}
+              style={{
+                cursor:
+                  isCropMode || activeTool === "eyedropper"
+                    ? "crosshair"
+                    : activeTool === "select"
+                    ? cursorStyle
+                    : "crosshair",
+              }}
+              className="shadow-2xl border border-zinc-800/80 rounded-lg max-w-none"
             />
           </div>
         )}
@@ -1480,7 +1641,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <Layers className="w-3.5 h-3.5 text-sky-400" />
               <span>Recent Captures ({captures.length})</span>
               <span className="text-[10px] text-zinc-500 font-normal">
-                (Drag card onto canvas OR click <b>+ Merge</b> to combine images)
+                (Click <b>+ Merge</b> to insert onto canvas • Drag corners with handles to <b>Resize</b>)
               </span>
             </div>
 
@@ -1642,7 +1803,7 @@ function drawAnnotationObject(
     }
     if (img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, obj.x, obj.y, obj.width, obj.height);
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.7)";
       ctx.lineWidth = 1.5;
       ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
     }
@@ -1810,6 +1971,7 @@ function drawAnnotationObject(
   ctx.restore();
 }
 
+// Draw Selection outline and 8 resize handles for resizing
 function drawSelectionBox(ctx: CanvasRenderingContext2D, obj: AnnotationObject) {
   const bounds = getObjectBoundingBox(obj);
   const pad = 6;
@@ -1824,18 +1986,40 @@ function drawSelectionBox(ctx: CanvasRenderingContext2D, obj: AnnotationObject) 
   ctx.setLineDash([4, 4]);
   ctx.strokeRect(x, y, w, h);
 
-  ctx.fillStyle = "#38BDF8";
-  ctx.setLineDash([]);
-  const handleSize = 6;
-  const corners = [
+  // 8 Handles
+  const handles = [
     { cx: x, cy: y },
+    { cx: x + w / 2, cy: y },
     { cx: x + w, cy: y },
-    { cx: x, cy: y + h },
+    { cx: x + w, cy: y + h / 2 },
     { cx: x + w, cy: y + h },
+    { cx: x + w / 2, cy: y + h },
+    { cx: x, cy: y + h },
+    { cx: x, cy: y + h / 2 },
   ];
-  for (const c of corners) {
+
+  ctx.setLineDash([]);
+  const handleSize = 8;
+  for (const c of handles) {
+    ctx.fillStyle = "#FFFFFF";
     ctx.fillRect(c.cx - handleSize / 2, c.cy - handleSize / 2, handleSize, handleSize);
+    ctx.strokeStyle = "#0284C7";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(c.cx - handleSize / 2, c.cy - handleSize / 2, handleSize, handleSize);
   }
+
+  // Dimension tag
+  const dimText = `${Math.round(w - pad * 2)} × ${Math.round(h - pad * 2)}`;
+  ctx.font = "bold 10px monospace";
+  const tagW = ctx.measureText(dimText).width + 8;
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  ctx.beginPath();
+  ctx.roundRect(x + w / 2 - tagW / 2, y + h + 8, tagW, 16, 4);
+  ctx.fill();
+  ctx.fillStyle = "#38BDF8";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillText(dimText, x + w / 2, y + h + 16);
 
   ctx.restore();
 }
@@ -1943,6 +2127,79 @@ function moveObjectFromOrigin(initial: AnnotationObject, dx: number, dy: number)
       y: initial.y + dy,
     };
   }
+  return initial;
+}
+
+// Resize Object from handles with smooth proportional scaling for images
+function resizeObjectFromOrigin(
+  initial: AnnotationObject,
+  handle: ResizeHandleType,
+  dx: number,
+  dy: number
+): AnnotationObject {
+  if (initial.type === "image" || initial.type === "rect" || initial.type === "highlight" || initial.type === "blur") {
+    let nx = initial.x;
+    let ny = initial.y;
+    let nw = initial.width;
+    let nh = initial.height;
+    const minSize = 25;
+
+    // Corner with aspect ratio preservation for images
+    if (initial.type === "image" && (handle === "se" || handle === "sw" || handle === "ne" || handle === "nw")) {
+      const origAspect = initial.width / (initial.height || 1);
+      if (handle === "se") {
+        nw = Math.max(minSize, initial.width + dx);
+        nh = Math.round(nw / origAspect);
+      } else if (handle === "sw") {
+        nw = Math.max(minSize, initial.width - dx);
+        nh = Math.round(nw / origAspect);
+        nx = initial.x + (initial.width - nw);
+      } else if (handle === "ne") {
+        nw = Math.max(minSize, initial.width + dx);
+        nh = Math.round(nw / origAspect);
+        ny = initial.y + (initial.height - nh);
+      } else if (handle === "nw") {
+        nw = Math.max(minSize, initial.width - dx);
+        nh = Math.round(nw / origAspect);
+        nx = initial.x + (initial.width - nw);
+        ny = initial.y + (initial.height - nh);
+      }
+      return { ...initial, x: nx, y: ny, width: nw, height: nh };
+    }
+
+    // Freeform handles
+    if (handle.includes("e")) nw = Math.max(minSize, initial.width + dx);
+    if (handle.includes("s")) nh = Math.max(minSize, initial.height + dy);
+    if (handle.includes("w")) {
+      nw = Math.max(minSize, initial.width - dx);
+      nx = initial.x + (initial.width - nw);
+    }
+    if (handle.includes("n")) {
+      nh = Math.max(minSize, initial.height - dy);
+      ny = initial.y + (initial.height - nh);
+    }
+
+    return { ...initial, x: nx, y: ny, width: nw, height: nh };
+  } else if (initial.type === "text") {
+    let nx = initial.x;
+    let ny = initial.y;
+    let nw = initial.width || 200;
+    let nh = initial.height || 60;
+    const minSize = 40;
+
+    if (handle.includes("e")) nw = Math.max(minSize, (initial.width || 200) + dx);
+    if (handle.includes("s")) nh = Math.max(minSize, (initial.height || 60) + dy);
+    if (handle.includes("w")) {
+      nw = Math.max(minSize, (initial.width || 200) - dx);
+      nx = initial.x + ((initial.width || 200) - nw);
+    }
+    if (handle.includes("n")) {
+      nh = Math.max(minSize, (initial.height || 60) - dy);
+      ny = initial.y + ((initial.height || 60) - nh);
+    }
+    return { ...initial, x: nx, y: ny, width: nw, height: nh };
+  }
+
   return initial;
 }
 
