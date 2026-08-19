@@ -36,7 +36,7 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [record.thumbnailPath]);
+  }, [record.thumbnailPath, record.updatedAt, record.width, record.height]);
 
   const handleCopyOriginal = async (e: React.MouseEvent) => {
     e.stopPropagation();

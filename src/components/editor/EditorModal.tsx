@@ -1179,10 +1179,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-zinc-950 flex flex-col select-none animate-in fade-in duration-150">
-      {/* Top Toolbar */}
-      <div className="h-14 border-b border-zinc-800/80 bg-zinc-900/95 px-4 flex items-center justify-between gap-2 shadow-lg backdrop-blur-md">
-        {/* Tools Group */}
-        <div className="flex items-center gap-1 overflow-x-auto py-1">
+      {/* Top Toolbar - Fully Responsive with Glassmorphism Badges */}
+      <div className="min-h-[52px] h-auto border-b border-zinc-800/80 bg-zinc-900/95 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 shadow-lg backdrop-blur-md">
+        {/* Left: Tools Group */}
+        <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
           <ToolButton
             active={activeTool === "select" && !isCropMode}
             onClick={() => {
@@ -1291,7 +1291,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               title="Revert back to original uncropped image"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>Uncrop</span>
+              <span className="hidden sm:inline">Uncrop</span>
             </button>
           )}
 
@@ -1302,20 +1302,20 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             title="Expand Canvas Workspace (Mở rộng thêm không gian ghép ảnh)"
           >
             <Maximize2 className="w-3.5 h-3.5" />
-            <span>+ Canvas</span>
+            <span className="hidden sm:inline">+ Canvas</span>
           </button>
 
-          <div className="h-5 w-px bg-zinc-800 mx-1" />
+          <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
           {/* Delete Selected Item */}
           {selectedId && (
             <button
               onClick={handleDeleteSelected}
-              className="p-2 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white transition-all shadow-md flex items-center gap-1 text-xs font-semibold"
+              className="p-1.5 px-2 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white transition-all shadow-md flex items-center gap-1 text-xs font-semibold"
               title="Delete Selected Annotation (Del / Backspace)"
             >
-              <Trash2 className="w-4 h-4" />
-              <span>Delete</span>
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Delete</span>
             </button>
           )}
 
@@ -1323,40 +1323,40 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           <button
             onClick={handleClearAll}
             disabled={objects.length === 0}
-            className="p-2 rounded-lg text-zinc-400 hover:text-red-400 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
             title="Clear All Annotations"
           >
-            <RotateCcw className="w-4 h-4" />
+            <RotateCcw className="w-3.5 h-3.5" />
           </button>
 
           {/* Undo / Redo */}
           <button
             onClick={handleUndo}
             disabled={historyIndex <= 0}
-            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-100 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
             title="Undo (Ctrl+Z)"
           >
-            <Undo2 className="w-4 h-4" />
+            <Undo2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleRedo}
             disabled={historyIndex >= history.length - 1}
-            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-100 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
             title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
           >
-            <Redo2 className="w-4 h-4" />
+            <Redo2 className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Style Options (Color Palette & Eyedropper & Stroke & Fill) */}
-        <div className="flex items-center gap-2">
+        {/* Center: Style Options (Color Palette & Eyedropper & Stroke & Fill) */}
+        <div className="flex items-center gap-1.5">
           {/* Color Palette + Eyedropper */}
-          <div className="flex items-center gap-1.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+          <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
             {COLORS.map((c) => (
               <button
                 key={c}
                 onClick={() => handleUpdateSelectedColor(c)}
-                className={`w-4 h-4 rounded-full transition-transform ${
+                className={`w-3.5 h-3.5 rounded-full transition-transform ${
                   currentColor.toUpperCase() === c.toUpperCase()
                     ? "scale-125 ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-900 shadow-sm"
                     : "hover:scale-110 opacity-85 hover:opacity-100"
@@ -1367,7 +1367,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             ))}
 
             {/* Custom Color Picker Input */}
-            <div className="relative flex items-center justify-center w-4 h-4 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Custom Color Picker">
+            <div className="relative flex items-center justify-center w-3.5 h-3.5 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Custom Color Picker">
               <input
                 type="color"
                 value={currentColor}
@@ -1380,7 +1380,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             {/* Eyedropper Tool */}
             <button
               onClick={handleTriggerEyedropper}
-              className={`p-1 rounded transition-colors ${
+              className={`p-0.5 rounded transition-colors ${
                 activeTool === "eyedropper"
                   ? "bg-amber-500 text-black"
                   : "text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
@@ -1392,12 +1392,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
 
           {/* Stroke Width */}
-          <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+          <div className="flex items-center gap-0.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
             {STROKE_WIDTHS.map((w) => (
               <button
                 key={w}
                 onClick={() => handleUpdateSelectedStroke(w)}
-                className={`px-1.5 py-0.5 text-[11px] font-mono rounded ${
+                className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
                   currentStrokeWidth === w
                     ? "bg-sky-600 text-white font-bold"
                     : "text-zinc-400 hover:text-zinc-200"
@@ -1411,37 +1411,37 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           {/* Fill shape toggle */}
           <button
             onClick={() => setFillShape(!fillShape)}
-            className={`px-2 py-1 text-[11px] font-medium rounded-lg border transition-all ${
+            className={`px-1.5 py-1 text-[10px] font-medium rounded-lg border transition-all ${
               fillShape
                 ? "bg-sky-600/30 text-sky-300 border-sky-500/50 font-bold"
                 : "bg-zinc-950/60 text-zinc-400 border-zinc-800 hover:text-zinc-200"
             }`}
             title="Toggle Semi-transparent Fill for Shapes"
           >
-            {fillShape ? "Filled" : "Outline"}
+            {fillShape ? "Fill" : "Outline"}
           </button>
 
-          <div className="h-5 w-px bg-zinc-800 mx-1" />
+          <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
           {/* Zoom Controls */}
-          <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+          <div className="flex items-center gap-0.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
             <button
               onClick={handleZoomOut}
-              className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              className="p-0.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
               title="Zoom Out (Ctrl -)"
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleZoomReset}
-              className="px-1.5 py-0.5 text-[11px] font-mono text-zinc-300 hover:text-white font-medium"
+              className="px-1 py-0.5 text-[10px] font-mono text-zinc-300 hover:text-white font-medium"
               title="Reset Zoom to 100% (Ctrl 0)"
             >
               {Math.round(zoomLevel * 100)}%
             </button>
             <button
               onClick={handleZoomIn}
-              className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              className="p-0.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
               title="Zoom In (Ctrl +)"
             >
               <ZoomIn className="w-3.5 h-3.5" />
@@ -1449,38 +1449,38 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
         </div>
 
-        {/* Right Actions: Copy, Save Image As, Save Project, Close */}
-        <div className="flex items-center gap-2">
+        {/* Right: Actions (Copy, Save Image As, Save Project, Close) */}
+        <div className="flex items-center gap-1.5">
           <button
             onClick={handleCopyMerged}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-sky-600/20"
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-sky-600/20"
             title="Copy result image to clipboard (Ctrl+C)"
           >
             {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? "Copied!" : "Copy (Ctrl+C)"}</span>
+            <span className="hidden sm:inline">{copied ? "Copied!" : "Copy"}</span>
           </button>
 
           <button
             onClick={handleExportImageAs}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-emerald-600/20"
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-emerald-600/20"
             title="Save annotated image as PNG / JPG (Ctrl+S)"
           >
             {exported ? <Check className="w-3.5 h-3.5" /> : <Download className="w-3.5 h-3.5" />}
-            <span>{exported ? "Saved!" : "Save As (Ctrl+S)"}</span>
+            <span className="hidden sm:inline">{exported ? "Saved!" : "Save As"}</span>
           </button>
 
           <button
             onClick={handleSaveProject}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold transition-all border border-zinc-700"
+            className="flex items-center gap-1 px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold transition-all border border-zinc-700"
             title="Save vector project (re-editable later)"
           >
             {saved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Save className="w-3.5 h-3.5" />}
-            <span>{saved ? "Saved" : "Save Project"}</span>
+            <span className="hidden md:inline">{saved ? "Saved" : "Project"}</span>
           </button>
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors ml-1"
+            className="p-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors ml-1"
             title="Close Editor (Esc)"
           >
             <X className="w-5 h-5" />
@@ -1716,7 +1716,7 @@ const BottomThumbnailCard: React.FC<{
     return () => {
       isMounted = false;
     };
-  }, [item.thumbnailPath]);
+  }, [item.thumbnailPath, item.updatedAt, item.width, item.height]);
 
   const handleDeleteItem = async (e: React.MouseEvent) => {
     e.stopPropagation();
