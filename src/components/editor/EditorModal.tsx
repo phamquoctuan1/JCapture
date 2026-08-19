@@ -22,6 +22,10 @@ import {
   Check,
   ZoomIn,
   ZoomOut,
+  Pipette,
+  Layers,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -35,18 +39,22 @@ import {
 
 interface EditorModalProps {
   record: CaptureRecord;
+  captures?: CaptureRecord[];
+  onSelectRecord?: (record: CaptureRecord) => void;
   onClose: () => void;
   onUpdateRecord: (record: CaptureRecord) => void;
 }
 
+// Extended rich color palette with user's brand bright yellow (#FFDE2A)
 const COLORS = [
+  "#FFDE2A", // User Bright Yellow
   "#EF4444", // Red
   "#F97316", // Orange
   "#EAB308", // Yellow
   "#22C55E", // Green
   "#06B6D4", // Cyan
   "#3B82F6", // Blue
-  "#A855F7", // Purple
+  "#8B5CF6", // Purple
   "#EC4899", // Pink
   "#FFFFFF", // White
   "#000000", // Black
@@ -56,17 +64,22 @@ const STROKE_WIDTHS = [2, 4, 6, 8, 12];
 
 export const EditorModal: React.FC<EditorModalProps> = ({
   record,
+  captures = [],
+  onSelectRecord,
   onClose,
   onUpdateRecord,
 }) => {
-  const [activeTool, setActiveTool] = useState<ToolType>("select");
-  const [currentColor, setCurrentColor] = useState<string>("#EF4444");
+  const [activeTool, setActiveTool] = useState<ToolType | "eyedropper">("select");
+  const [currentColor, setCurrentColor] = useState<string>("#FFDE2A");
   const [currentStrokeWidth, setCurrentStrokeWidth] = useState<number>(4);
   const [fillShape, setFillShape] = useState<boolean>(false);
   const [stepCounter, setStepCounter] = useState<number>(1);
 
   // Zoom & Viewport state
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+
+  // Bottom dock collapse state
+  const [showBottomDock, setShowBottomDock] = useState<boolean>(true);
 
   const [objects, setObjects] = useState<AnnotationObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -111,6 +124,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   // 1. Load Background Image & Project Annotations
   useEffect(() => {
     let isMounted = true;
+    setBgImage(null);
 
     const loadData = async () => {
       try {
@@ -143,8 +157,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             setStepCounter(maxStep + 1);
           }
         } else {
+          setObjects([]);
           setHistory([[]]);
           setHistoryIndex(0);
+          setStepCounter(1);
         }
       } catch (err) {
         console.error("Failed to load editor data:", err);
@@ -204,7 +220,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleZoomOut = () => setZoomLevel((z) => Math.max(0.25, Number((z - 0.25).toFixed(2))));
   const handleZoomReset = () => setZoomLevel(1.0);
 
-  // Wheel listener for Zooming
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -213,6 +228,25 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       } else {
         handleZoomOut();
       }
+    }
+  };
+
+  // Eyedropper Tool handler (Screen/Canvas pipette)
+  const handleTriggerEyedropper = async () => {
+    if ("EyeDropper" in window) {
+      try {
+        const eyeDropper = new (window as any).EyeDropper();
+        const result = await eyeDropper.open();
+        if (result?.sRGBHex) {
+          handleUpdateSelectedColor(result.sRGBHex);
+          setActiveTool("select");
+        }
+      } catch {
+        // Fallback to canvas sampling mode
+        setActiveTool("eyedropper");
+      }
+    } else {
+      setActiveTool("eyedropper");
     }
   };
 
@@ -244,13 +278,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         else if (isCropMode) {
           setIsCropMode(false);
           setCropRect(null);
+        } else if (activeTool === "eyedropper") {
+          setActiveTool("select");
         }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, isCropMode, inlineText.visible, handleDeleteSelected, handleUndo, handleRedo]);
+  }, [selectedId, isCropMode, inlineText.visible, activeTool, handleDeleteSelected, handleUndo, handleRedo]);
 
   // 2. Render Canvas Frame
   useEffect(() => {
@@ -265,12 +301,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       canvas.height = bgImage.naturalHeight;
     }
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
-    // Draw background screenshot
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(bgImage, 0, 0);
 
-    // Draw all objects
     const allObjects = [...objects];
     if (currentTempObjectRef.current) {
       allObjects.push(currentTempObjectRef.current);
@@ -280,7 +316,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       drawAnnotationObject(ctx, obj, bgImage);
     }
 
-    // Draw Selection Bounding Box & Handles
     if (selectedId && !isCropMode) {
       const selObj = objects.find((o) => o.id === selectedId);
       if (selObj) {
@@ -288,13 +323,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
     }
 
-    // Draw Crop Overlay
     if (isCropMode && cropRect && cropRect.w > 0 && cropRect.h > 0) {
       drawCropOverlay(ctx, cropRect, canvas.width, canvas.height);
     }
   }, [bgImage, objects, selectedId, isCropMode, cropRect]);
 
-  // Canvas Native Coordinate Mapping (accounts for dynamic zoom)
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -320,6 +353,21 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { x, y } = getCanvasCoords(e);
     startPosRef.current = { x, y };
+
+    // Canvas Eyedropper mode: Sample pixel color
+    if (activeTool === "eyedropper") {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const pixel = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+          const hex = `#${((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase()}`;
+          handleUpdateSelectedColor(hex);
+          setActiveTool("select");
+        }
+      }
+      return;
+    }
 
     if (isCropMode) {
       isDrawingRef.current = true;
@@ -364,7 +412,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         y,
         number: stepCounter,
         color: currentColor,
-        textColor: "#FFFFFF",
+        textColor: currentColor === "#FFDE2A" || currentColor === "#FFFFFF" ? "#000000" : "#FFFFFF",
         radius: Math.max(16, currentStrokeWidth * 4),
       };
       setStepCounter((c) => c + 1);
@@ -552,7 +600,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Commit inline text creation
   const handleCommitInlineText = () => {
     if (!inlineText.text.trim()) {
       setInlineText((prev) => ({ ...prev, visible: false }));
@@ -577,7 +624,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setActiveTool("select");
   };
 
-  // Apply Crop Action
   const handleApplyCrop = () => {
     if (!cropRect || cropRect.w < 20 || cropRect.h < 20 || !bgImage) return;
 
@@ -614,7 +660,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     };
   };
 
-  // Update selected object style (Color & Stroke)
   const handleUpdateSelectedColor = (newColor: string) => {
     setCurrentColor(newColor);
     if (selectedId) {
@@ -643,7 +688,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Export merged image & Copy to clipboard
   const handleCopyMerged = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -658,7 +702,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Save As file dialog
   const handleExportImageAs = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -680,7 +723,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Save Project JSON
   const handleSaveProject = async () => {
     if (!bgImage) return;
 
@@ -855,23 +897,48 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </button>
         </div>
 
-        {/* Style Options (Color & Stroke & Fill) */}
+        {/* Style Options (Color Palette & Eyedropper & Stroke & Fill) */}
         <div className="flex items-center gap-2">
-          {/* Color Palette */}
-          <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+          {/* Color Palette + Eyedropper */}
+          <div className="flex items-center gap-1.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+            {/* Extended Color Palette */}
             {COLORS.map((c) => (
               <button
                 key={c}
                 onClick={() => handleUpdateSelectedColor(c)}
                 className={`w-4 h-4 rounded-full transition-transform ${
-                  currentColor === c
-                    ? "scale-125 ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-900"
-                    : "hover:scale-110 opacity-80 hover:opacity-100"
+                  currentColor.toUpperCase() === c.toUpperCase()
+                    ? "scale-125 ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-900 shadow-sm"
+                    : "hover:scale-110 opacity-85 hover:opacity-100"
                 }`}
                 style={{ backgroundColor: c }}
                 title={c}
               />
             ))}
+
+            {/* Custom Color Picker Input */}
+            <div className="relative flex items-center justify-center w-4 h-4 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Choose Custom Color">
+              <input
+                type="color"
+                value={currentColor}
+                onChange={(e) => handleUpdateSelectedColor(e.target.value)}
+                className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
+              />
+              <div className="w-full h-full" style={{ backgroundColor: currentColor }} />
+            </div>
+
+            {/* Eyedropper / Pipette Button */}
+            <button
+              onClick={handleTriggerEyedropper}
+              className={`p-1 rounded transition-colors ${
+                activeTool === "eyedropper"
+                  ? "bg-amber-500 text-black"
+                  : "text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
+              }`}
+              title="Eyedropper / Bút chọn màu (Pick any color)"
+            >
+              <Pipette className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Stroke Width */}
@@ -1091,7 +1158,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               className={`shadow-2xl border border-zinc-800/80 rounded-lg max-w-none ${
-                isCropMode
+                isCropMode || activeTool === "eyedropper"
                   ? "cursor-crosshair"
                   : activeTool === "select"
                   ? "cursor-default"
@@ -1101,7 +1168,95 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Bottom Filmstrip Dock: Recent Captures Quick-Switch */}
+      {captures.length > 0 && onSelectRecord && (
+        <div className="border-t border-zinc-800/80 bg-zinc-900/90 backdrop-blur-md px-3 py-2 flex flex-col gap-1.5 shadow-2xl transition-all">
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-400">
+              <Layers className="w-3.5 h-3.5 text-sky-400" />
+              <span>Recent Captures ({captures.length})</span>
+            </div>
+
+            <button
+              onClick={() => setShowBottomDock(!showBottomDock)}
+              className="p-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 text-[10px] flex items-center gap-1"
+            >
+              <span>{showBottomDock ? "Hide" : "Show"}</span>
+              {showBottomDock ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+            </button>
+          </div>
+
+          {showBottomDock && (
+            <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-thin scrollbar-thumb-zinc-700">
+              {captures.map((item) => (
+                <BottomThumbnailCard
+                  key={item.id}
+                  item={item}
+                  isActive={item.id === record.id}
+                  onClick={() => onSelectRecord(item)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+};
+
+// Miniature Bottom Thumbnail Card
+const BottomThumbnailCard: React.FC<{
+  item: CaptureRecord;
+  isActive: boolean;
+  onClick: () => void;
+}> = ({ item, isActive, onClick }) => {
+  const [thumbSrc, setThumbSrc] = useState<string>("");
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadThumb = async () => {
+      try {
+        const dataUrl = await invoke<string>("read_image_base64", {
+          filePath: item.thumbnailPath,
+        });
+        if (isMounted) setThumbSrc(dataUrl);
+      } catch (err) {
+        console.error("Failed to load thumbnail:", err);
+      }
+    };
+    loadThumb();
+    return () => {
+      isMounted = false;
+    };
+  }, [item.thumbnailPath]);
+
+  return (
+    <button
+      onClick={onClick}
+      className={`group relative flex-shrink-0 w-24 h-14 rounded-lg overflow-hidden border transition-all ${
+        isActive
+          ? "border-sky-400 ring-2 ring-sky-500/40 scale-105 shadow-md shadow-sky-500/20"
+          : "border-zinc-800 hover:border-zinc-600 opacity-70 hover:opacity-100"
+      }`}
+      title={`Switch to ${item.width}x${item.height} image`}
+    >
+      {thumbSrc ? (
+        <img
+          src={thumbSrc}
+          alt="Thumbnail"
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="w-full h-full bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-600">
+          Loading...
+        </div>
+      )}
+
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-zinc-300 font-mono flex items-center justify-between">
+        <span>{item.width}x{item.height}</span>
+      </div>
+    </button>
   );
 };
 
@@ -1124,7 +1279,6 @@ const ToolButton: React.FC<{
   </button>
 );
 
-// Draw Annotation Object onto Canvas
 function drawAnnotationObject(
   ctx: CanvasRenderingContext2D,
   obj: AnnotationObject,
@@ -1287,7 +1441,6 @@ function drawAnnotationObject(
   ctx.restore();
 }
 
-// Draw Selection Bounding Box with Corner Handles
 function drawSelectionBox(ctx: CanvasRenderingContext2D, obj: AnnotationObject) {
   const bounds = getObjectBoundingBox(obj);
   const pad = 6;
@@ -1318,7 +1471,6 @@ function drawSelectionBox(ctx: CanvasRenderingContext2D, obj: AnnotationObject) 
   ctx.restore();
 }
 
-// Draw Crop Overlay
 function drawCropOverlay(
   ctx: CanvasRenderingContext2D,
   crop: { x: number; y: number; w: number; h: number },

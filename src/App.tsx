@@ -72,6 +72,14 @@ export default function App() {
     }
   };
 
+  const handleTriggerFullscreenCapture = async () => {
+    try {
+      await invoke("trigger_fullscreen_capture");
+    } catch (err) {
+      console.error("Failed to trigger fullscreen capture:", err);
+    }
+  };
+
   const handleTogglePin = async (id: string, isPinned: boolean) => {
     try {
       await invoke("toggle_pin_capture", { id, isPinned });
@@ -116,6 +124,7 @@ export default function App() {
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 select-none overflow-hidden border border-zinc-800/80 rounded-lg shadow-2xl">
       <Header
         onTriggerCapture={handleTriggerCapture}
+        onTriggerFullscreenCapture={handleTriggerFullscreenCapture}
         onOpenSettings={() => setShowSettings(true)}
         isAlwaysOnTop={isAlwaysOnTop}
         onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
@@ -136,6 +145,8 @@ export default function App() {
       {activeEditorRecord && (
         <EditorModal
           record={activeEditorRecord}
+          captures={captures}
+          onSelectRecord={(record) => setActiveEditorRecord(record)}
           onClose={() => setActiveEditorRecord(null)}
           onUpdateRecord={handleUpdateRecord}
         />

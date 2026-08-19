@@ -1,8 +1,9 @@
 import React from "react";
-import { Camera, Settings, Pin } from "lucide-react";
+import { Camera, Settings, Pin, Monitor } from "lucide-react";
 
 interface HeaderProps {
   onTriggerCapture: () => void;
+  onTriggerFullscreenCapture: () => void;
   onOpenSettings: () => void;
   isAlwaysOnTop: boolean;
   onToggleAlwaysOnTop: () => void;
@@ -11,6 +12,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   onTriggerCapture,
+  onTriggerFullscreenCapture,
   onOpenSettings,
   isAlwaysOnTop,
   onToggleAlwaysOnTop,
@@ -47,6 +49,15 @@ export const Header: React.FC<HeaderProps> = ({
           <kbd className="ml-1 text-[10px] bg-sky-700/60 px-1.5 py-0.5 rounded font-mono">
             {captureShortcut}
           </kbd>
+        </button>
+
+        <button
+          onClick={onTriggerFullscreenCapture}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 text-zinc-200 hover:text-white text-xs font-medium transition-all border border-zinc-700"
+          title="Instant Full Screen Capture (1-Click)"
+        >
+          <Monitor className="w-3.5 h-3.5 text-sky-400" />
+          <span>Full Screen</span>
         </button>
 
         <div className="h-4 w-px bg-zinc-800 mx-1" />

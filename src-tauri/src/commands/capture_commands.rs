@@ -34,6 +34,61 @@ pub async fn trigger_capture(
 }
 
 #[tauri::command]
+pub async fn trigger_fullscreen_capture(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let app_handle = app.clone();
+    let paths = Arc::clone(&state.paths);
+    let db = Arc::clone(&state.db);
+
+    // Hide workspace window briefly to capture clean screen
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        match crate::native::ScreenSnapshot::capture_virtual_screen() {
+            Ok(snap) => {
+                let _ = copy_rgba_to_clipboard(snap.width, snap.height, &snap.rgba_data);
+
+                let capture_id = uuid::Uuid::new_v4().to_string();
+                if let Ok(record) = crate::storage::persist_capture(
+                    &db,
+                    &paths,
+                    &capture_id,
+                    "fullscreen",
+                    snap.width,
+                    snap.height,
+                    &snap.rgba_data,
+                ) {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                        let _ = window.emit("capture:new", &record);
+                    }
+                    let _ = app_handle.emit("capture:new", &record);
+                }
+            }
+            Err(e) => {
+                eprintln!("Fullscreen capture failed: {}", e);
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_recent_captures(
     state: State<'_, AppState>,
     limit: Option<i64>,
