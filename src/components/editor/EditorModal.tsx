@@ -46,6 +46,11 @@ interface EditorModalProps {
   onUpdateRecord: (record: CaptureRecord) => void;
 }
 
+interface EditorHistorySnapshot {
+  objects: AnnotationObject[];
+  bgSrc: string;
+}
+
 const COLORS = [
   "#FFDE2A", // User Brand Bright Yellow
   "#EF4444", // Red
@@ -62,7 +67,6 @@ const COLORS = [
 
 const STROKE_WIDTHS = [2, 4, 6, 8, 12];
 
-// Cache for loaded overlay images
 const overlayImageCache = new Map<string, HTMLImageElement>();
 
 export const EditorModal: React.FC<EditorModalProps> = ({
@@ -84,7 +88,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   const [objects, setObjects] = useState<AnnotationObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [history, setHistory] = useState<AnnotationObject[][]>([]);
+
+  // Full history stack supporting Undo/Redo of both annotations AND crops
+  const [history, setHistory] = useState<EditorHistorySnapshot[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
   // Text Box Editor State (placed at dragged rectangle)
@@ -115,6 +121,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const [cropRect, setCropRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
+  const currentBgSrcRef = useRef<string>("");
+
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const [exported, setExported] = useState(false);
@@ -133,6 +141,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     setBgImage(null);
+    setSelectedId(null);
+    setIsCropMode(false);
+    setCropRect(null);
 
     const loadData = async () => {
       try {
@@ -146,6 +157,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         img.onload = () => {
           if (isMounted) {
             setBgImage(img);
+            currentBgSrcRef.current = dataUrl;
           }
         };
 
@@ -156,10 +168,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           const project: AnnotationProject = JSON.parse(jsonStr);
           if (isMounted && project.objects) {
             setObjects(project.objects);
-            setHistory([project.objects]);
+            setHistory([{ objects: project.objects, bgSrc: dataUrl }]);
             setHistoryIndex(0);
 
-            // Pre-load any image overlays into memory cache
             for (const obj of project.objects) {
               if (obj.type === "image" && !overlayImageCache.has(obj.src)) {
                 const overlayImg = new Image();
@@ -175,7 +186,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           }
         } else {
           setObjects([]);
-          setHistory([[]]);
+          setHistory([{ objects: [], bgSrc: dataUrl }]);
           setHistoryIndex(0);
           setStepCounter(1);
         }
@@ -190,29 +201,57 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     };
   }, [record.id, record.originalPath, record.projectPath]);
 
-  const pushState = useCallback((newObjects: AnnotationObject[]) => {
+  // Push new state to undo/redo history
+  const pushState = useCallback((newObjects: AnnotationObject[], newBgSrc?: string) => {
+    const activeBgSrc = newBgSrc || currentBgSrcRef.current;
     const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newObjects);
+    newHistory.push({
+      objects: newObjects,
+      bgSrc: activeBgSrc,
+    });
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
     setObjects(newObjects);
   }, [history, historyIndex]);
 
+  // Control + Z (Undo)
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
       const nextIdx = historyIndex - 1;
+      const targetSnapshot = history[nextIdx];
       setHistoryIndex(nextIdx);
-      setObjects(history[nextIdx]);
+      setObjects(targetSnapshot.objects);
       setSelectedId(null);
+
+      // Revert crop if background image changed
+      if (targetSnapshot.bgSrc && targetSnapshot.bgSrc !== currentBgSrcRef.current) {
+        const revertImg = new Image();
+        revertImg.src = targetSnapshot.bgSrc;
+        revertImg.onload = () => {
+          setBgImage(revertImg);
+          currentBgSrcRef.current = targetSnapshot.bgSrc;
+        };
+      }
     }
   }, [historyIndex, history]);
 
+  // Control + Y (Redo)
   const handleRedo = useCallback(() => {
     if (historyIndex < history.length - 1) {
       const nextIdx = historyIndex + 1;
+      const targetSnapshot = history[nextIdx];
       setHistoryIndex(nextIdx);
-      setObjects(history[nextIdx]);
+      setObjects(targetSnapshot.objects);
       setSelectedId(null);
+
+      if (targetSnapshot.bgSrc && targetSnapshot.bgSrc !== currentBgSrcRef.current) {
+        const revertImg = new Image();
+        revertImg.src = targetSnapshot.bgSrc;
+        revertImg.onload = () => {
+          setBgImage(revertImg);
+          currentBgSrcRef.current = targetSnapshot.bgSrc;
+        };
+      }
     }
   }, [historyIndex, history]);
 
@@ -232,7 +271,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [objects.length, pushState]);
 
-  // Zoom helpers
   const handleZoomIn = () => setZoomLevel((z) => Math.min(4.0, Number((z + 0.25).toFixed(2))));
   const handleZoomOut = () => setZoomLevel((z) => Math.max(0.25, Number((z - 0.25).toFixed(2))));
   const handleZoomReset = () => setZoomLevel(1.0);
@@ -245,7 +283,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Eyedropper handler
   const handleTriggerEyedropper = async () => {
     if ("EyeDropper" in window) {
       try {
@@ -263,7 +300,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Export / Copy merged image
   const handleCopyMerged = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -324,7 +360,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [bgImage, record, objects, onUpdateRecord]);
 
-  // Insert image overlay onto canvas (From paste or drag-and-drop merge)
   const insertImageOverlay = useCallback((src: string, dropX?: number, dropY?: number) => {
     const img = new Image();
     img.src = src;
@@ -362,19 +397,19 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     };
   }, [objects, pushState]);
 
-  // Keyboard shortcut listener (Ctrl+S, Ctrl+C, Ctrl+V, Undo, Redo, Delete)
+  // Global Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+C, Ctrl+V, Delete)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (textBoxEditor.visible) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedId) {
-          handleDeleteSelected();
-        }
+        if (selectedId) handleDeleteSelected();
       } else if (e.ctrlKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
         if (e.shiftKey) handleRedo();
         else handleUndo();
       } else if (e.ctrlKey && e.key.toLowerCase() === "y") {
+        e.preventDefault();
         handleRedo();
       } else if (e.ctrlKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
@@ -415,7 +450,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
     };
 
-    // Paste handler for system clipboard images (e.g. from browser or screenshot)
     const handlePaste = (e: ClipboardEvent) => {
       if (textBoxEditor.visible) return;
       const items = e.clipboardData?.items;
@@ -556,7 +590,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
-    // Text tool: Drag a box to place styled text container!
     if (activeTool === "text") {
       isDrawingRef.current = true;
       currentTempObjectRef.current = {
@@ -573,7 +606,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
-    // Creating new annotation object
     isDrawingRef.current = true;
     const newId = `obj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
@@ -752,7 +784,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
 
-    // Finish dragging box for Text Tool -> Open Text Box editor!
     if (activeTool === "text") {
       const { x, y } = getCanvasCoords(e);
       const start = startPosRef.current;
@@ -798,7 +829,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Commit Text Box with customizable border & background
   const handleCommitTextBox = () => {
     if (!textBoxEditor.text.trim()) {
       setTextBoxEditor((prev) => ({ ...prev, visible: false }));
@@ -827,6 +857,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setActiveTool("select");
   };
 
+  // Safe and clean Crop Action with Undo support
   const handleApplyCrop = () => {
     if (!cropRect || cropRect.w < 20 || cropRect.h < 20 || !bgImage) return;
 
@@ -848,16 +879,18 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       cropRect.h
     );
 
+    const croppedDataUrl = cropCanvas.toDataURL("image/png");
     const croppedImg = new Image();
-    croppedImg.src = cropCanvas.toDataURL("image/png");
+    croppedImg.src = croppedDataUrl;
     croppedImg.onload = () => {
       setBgImage(croppedImg);
+      currentBgSrcRef.current = croppedDataUrl;
 
       const shiftedObjects = objects
         .map((obj) => moveObjectFromOrigin(obj, -cropRect.x, -cropRect.y))
         .filter((obj) => isObjectInsideBounds(obj, cropRect.w, cropRect.h));
 
-      pushState(shiftedObjects);
+      pushState(shiftedObjects, croppedDataUrl);
       setIsCropMode(false);
       setCropRect(null);
     };
@@ -894,7 +927,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Drop capture onto canvas to merge/combine
   const handleDropOnCanvas = async (e: React.DragEvent) => {
     e.preventDefault();
     const dataStr = e.dataTransfer.getData("application/json");
@@ -1065,7 +1097,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             onClick={handleRedo}
             disabled={historyIndex >= history.length - 1}
             className="p-2 rounded-lg text-zinc-400 hover:text-zinc-100 disabled:opacity-20 hover:bg-zinc-800 transition-colors"
-            title="Redo (Ctrl+Y)"
+            title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
           >
             <Redo2 className="w-4 h-4" />
           </button>
@@ -1428,7 +1460,6 @@ const BottomThumbnailCard: React.FC<{
     e.stopPropagation();
     try {
       await invoke("delete_capture", { id: item.id });
-      // Triggers focus refresh automatically
       window.dispatchEvent(new Event("focus"));
     } catch (err) {
       console.error("Failed to delete capture:", err);
@@ -1512,7 +1543,6 @@ function drawAnnotationObject(
     }
     if (img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, obj.x, obj.y, obj.width, obj.height);
-      // Border outline for overlay image
       ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
       ctx.lineWidth = 1;
       ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
@@ -1605,7 +1635,6 @@ function drawAnnotationObject(
       boxH = lines.length * lineHeight + padding * 2;
     }
 
-    // Draw background card
     if (obj.bgColor) {
       ctx.fillStyle = obj.bgColor;
       ctx.beginPath();
@@ -1613,7 +1642,6 @@ function drawAnnotationObject(
       ctx.fill();
     }
 
-    // Draw border outline
     if (obj.borderColor) {
       ctx.strokeStyle = obj.borderColor;
       ctx.lineWidth = obj.borderWidth || 2;
@@ -1622,7 +1650,6 @@ function drawAnnotationObject(
       ctx.stroke();
     }
 
-    // Draw text lines
     ctx.fillStyle = obj.color;
     ctx.textBaseline = "top";
     for (let i = 0; i < lines.length; i++) {
