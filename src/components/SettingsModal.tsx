@@ -20,7 +20,7 @@ interface SettingsModalProps {
 }
 
 const CURRENT_VERSION = "v0.1.0";
-const DEFAULT_REPO = "phamdinhthong113/JCapture"; // User repo name
+const DEFAULT_REPO = "phamquoctuan1/JCapture";
 
 interface ReleaseInfo {
   tag_name: string;
