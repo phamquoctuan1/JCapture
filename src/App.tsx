@@ -134,6 +134,7 @@ export default function App() {
       <main className="flex-1 flex overflow-hidden">
         <RecentWorkspace
           captures={captures}
+          captureShortcut={captureShortcut}
           onOpenEditor={(record) => setActiveEditorRecord(record)}
           onTogglePin={handleTogglePin}
           onDelete={handleDelete}

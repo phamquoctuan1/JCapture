@@ -26,6 +26,8 @@ import {
   Layers,
   ChevronUp,
   ChevronDown,
+  PlusCircle,
+  RefreshCw,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -52,7 +54,7 @@ interface EditorHistorySnapshot {
 }
 
 const COLORS = [
-  "#FFDE2A", // User Brand Bright Yellow
+  "#FFDE2A", // Brand Bright Yellow
   "#EF4444", // Red
   "#F97316", // Orange
   "#EAB308", // Yellow
@@ -119,8 +121,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   // Crop mode state
   const [isCropMode, setIsCropMode] = useState(false);
   const [cropRect, setCropRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [isCropped, setIsCropped] = useState(false);
 
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
+  const originalDataUrlRef = useRef<string>("");
   const currentBgSrcRef = useRef<string>("");
 
   const [copied, setCopied] = useState(false);
@@ -144,6 +148,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setSelectedId(null);
     setIsCropMode(false);
     setCropRect(null);
+    setIsCropped(false);
 
     const loadData = async () => {
       try {
@@ -157,6 +162,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         img.onload = () => {
           if (isMounted) {
             setBgImage(img);
+            originalDataUrlRef.current = dataUrl;
             currentBgSrcRef.current = dataUrl;
           }
         };
@@ -223,13 +229,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setObjects(targetSnapshot.objects);
       setSelectedId(null);
 
-      // Revert crop if background image changed
+      // Revert background image if crop changed
       if (targetSnapshot.bgSrc && targetSnapshot.bgSrc !== currentBgSrcRef.current) {
         const revertImg = new Image();
         revertImg.src = targetSnapshot.bgSrc;
         revertImg.onload = () => {
           setBgImage(revertImg);
           currentBgSrcRef.current = targetSnapshot.bgSrc;
+          setIsCropped(targetSnapshot.bgSrc !== originalDataUrlRef.current);
         };
       }
     }
@@ -250,6 +257,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         revertImg.onload = () => {
           setBgImage(revertImg);
           currentBgSrcRef.current = targetSnapshot.bgSrc;
+          setIsCropped(targetSnapshot.bgSrc !== originalDataUrlRef.current);
         };
       }
     }
@@ -270,6 +278,19 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setStepCounter(1);
     }
   }, [objects.length, pushState]);
+
+  // Reset to original uncropped image
+  const handleRevertToOriginal = () => {
+    if (!originalDataUrlRef.current) return;
+    const img = new Image();
+    img.src = originalDataUrlRef.current;
+    img.onload = () => {
+      setBgImage(img);
+      currentBgSrcRef.current = originalDataUrlRef.current;
+      setIsCropped(false);
+      pushState(objects, originalDataUrlRef.current);
+    };
+  };
 
   const handleZoomIn = () => setZoomLevel((z) => Math.min(4.0, Number((z + 0.25).toFixed(2))));
   const handleZoomOut = () => setZoomLevel((z) => Math.max(0.25, Number((z - 0.25).toFixed(2))));
@@ -360,13 +381,24 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [bgImage, record, objects, onUpdateRecord]);
 
-  const insertImageOverlay = useCallback((src: string, dropX?: number, dropY?: number) => {
-    const img = new Image();
-    img.src = src;
-    img.onload = () => {
-      overlayImageCache.set(src, img);
+  // Insert image overlay onto canvas (From paste, drag-and-drop, or + button)
+  const insertImageOverlay = useCallback(async (filePathOrBase64: string, dropX?: number, dropY?: number) => {
+    let base64Data = filePathOrBase64;
+    if (!filePathOrBase64.startsWith("data:image")) {
+      try {
+        base64Data = await invoke<string>("read_image_base64", { filePath: filePathOrBase64 });
+      } catch (err) {
+        console.error("Failed to read image for overlay:", err);
+        return;
+      }
+    }
 
-      const maxDimension = 400;
+    const img = new Image();
+    img.src = base64Data;
+    img.onload = () => {
+      overlayImageCache.set(base64Data, img);
+
+      const maxDimension = 360;
       let w = img.naturalWidth || 300;
       let h = img.naturalHeight || 200;
 
@@ -377,8 +409,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
 
       const canvas = canvasRef.current;
-      const posX = dropX !== undefined ? dropX : canvas ? Math.round((canvas.width - w) / 2) : 50;
-      const posY = dropY !== undefined ? dropY : canvas ? Math.round((canvas.height - h) / 2) : 50;
+      const canvasW = canvas?.width || 800;
+      const canvasH = canvas?.height || 600;
+
+      let posX = dropX !== undefined ? Math.max(10, Math.min(canvasW - w - 10, dropX)) : Math.round((canvasW - w) / 2);
+      let posY = dropY !== undefined ? Math.max(10, Math.min(canvasH - h - 10, dropY)) : Math.round((canvasH - h) / 2);
 
       const newId = `img_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
       const imgObj: ImageOverlayObject = {
@@ -388,7 +423,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         y: posY,
         width: w,
         height: h,
-        src,
+        src: base64Data,
       };
 
       pushState([...objects, imgObj]);
@@ -862,21 +897,21 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (!cropRect || cropRect.w < 20 || cropRect.h < 20 || !bgImage) return;
 
     const cropCanvas = document.createElement("canvas");
-    cropCanvas.width = cropRect.w;
-    cropCanvas.height = cropRect.h;
+    cropCanvas.width = Math.round(cropRect.w);
+    cropCanvas.height = Math.round(cropRect.h);
     const cropCtx = cropCanvas.getContext("2d");
     if (!cropCtx) return;
 
     cropCtx.drawImage(
       bgImage,
-      cropRect.x,
-      cropRect.y,
-      cropRect.w,
-      cropRect.h,
+      Math.round(cropRect.x),
+      Math.round(cropRect.y),
+      Math.round(cropRect.w),
+      Math.round(cropRect.h),
       0,
       0,
-      cropRect.w,
-      cropRect.h
+      cropCanvas.width,
+      cropCanvas.height
     );
 
     const croppedDataUrl = cropCanvas.toDataURL("image/png");
@@ -885,10 +920,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     croppedImg.onload = () => {
       setBgImage(croppedImg);
       currentBgSrcRef.current = croppedDataUrl;
+      setIsCropped(true);
 
       const shiftedObjects = objects
-        .map((obj) => moveObjectFromOrigin(obj, -cropRect.x, -cropRect.y))
-        .filter((obj) => isObjectInsideBounds(obj, cropRect.w, cropRect.h));
+        .map((obj) => moveObjectFromOrigin(obj, -Math.round(cropRect.x), -Math.round(cropRect.y)))
+        .filter((obj) => isObjectInsideBounds(obj, cropCanvas.width, cropCanvas.height));
 
       pushState(shiftedObjects, croppedDataUrl);
       setIsCropMode(false);
@@ -927,30 +963,50 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
+  // Robust Drag & Drop on Canvas
   const handleDropOnCanvas = async (e: React.DragEvent) => {
     e.preventDefault();
-    const dataStr = e.dataTransfer.getData("application/json");
-    if (!dataStr) return;
+    e.stopPropagation();
 
-    try {
-      const item: CaptureRecord = JSON.parse(dataStr);
-      const dataUrl = await invoke<string>("read_image_base64", {
-        filePath: item.originalPath,
-      });
+    const canvas = canvasRef.current;
+    let dropX: number | undefined;
+    let dropY: number | undefined;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      dropX = Math.round((e.clientX - rect.left) * scaleX);
+      dropY = Math.round((e.clientY - rect.top) * scaleY);
+    }
 
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const dropX = Math.round((e.clientX - rect.left) * scaleX);
-        const dropY = Math.round((e.clientY - rect.top) * scaleY);
-        insertImageOverlay(dataUrl, dropX, dropY);
-      } else {
-        insertImageOverlay(dataUrl);
+    const jsonStr = e.dataTransfer.getData("application/json");
+    const textStr = e.dataTransfer.getData("text/plain");
+
+    if (jsonStr) {
+      try {
+        const item: CaptureRecord = JSON.parse(jsonStr);
+        if (item.originalPath) {
+          insertImageOverlay(item.originalPath, dropX, dropY);
+          return;
+        }
+      } catch {}
+    }
+
+    if (textStr && (textStr.includes("\\") || textStr.includes("/") || textStr.startsWith("data:image"))) {
+      insertImageOverlay(textStr, dropX, dropY);
+      return;
+    }
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const src = evt.target?.result as string;
+          if (src) insertImageOverlay(src, dropX, dropY);
+        };
+        reader.readAsDataURL(file);
       }
-    } catch (err) {
-      console.error("Failed to drop and insert image overlay:", err);
     }
   };
 
@@ -1059,6 +1115,18 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             icon={<Crop className="w-4 h-4 text-emerald-400" />}
             label="Crop Image"
           />
+
+          {/* Revert crop button */}
+          {isCropped && (
+            <button
+              onClick={handleRevertToOriginal}
+              className="p-1.5 px-2 rounded-lg bg-zinc-800 text-amber-400 hover:bg-amber-500/20 text-xs flex items-center gap-1 font-medium transition-colors"
+              title="Revert back to original uncropped image"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Uncrop</span>
+            </button>
+          )}
 
           <div className="h-5 w-px bg-zinc-800 mx-1" />
 
@@ -1243,27 +1311,34 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         </div>
       </div>
 
-      {/* Main Canvas Viewport (Scrollable & Zoomable & Drop-target for Merging images) */}
+      {/* Main Canvas Viewport */}
       <div
         ref={containerRef}
         onWheel={handleWheel}
         onDragOver={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           e.dataTransfer.dropEffect = "copy";
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
         }}
         onDrop={handleDropOnCanvas}
         className="flex-1 overflow-auto bg-zinc-950 flex items-center justify-center p-8 relative"
       >
         {/* Floating Crop Actions Banner */}
         {isCropMode && (
-          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-zinc-700/80 px-4 py-2 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
-            <span className="text-xs text-zinc-300">
-              Drag a box on the image to crop.
+          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-emerald-500/80 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
+            <span className="text-xs text-zinc-200 font-medium">
+              {cropRect && cropRect.w > 10 && cropRect.h > 10
+                ? `Crop Region: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
+                : "Drag a box on canvas to select crop region"}
             </span>
             {cropRect && cropRect.w > 20 && cropRect.h > 20 && (
               <button
                 onClick={handleApplyCrop}
-                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-lg shadow-emerald-600/30"
               >
                 <Check className="w-3.5 h-3.5" />
                 <span>Apply Crop</span>
@@ -1274,9 +1349,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                 setIsCropMode(false);
                 setCropRect(null);
               }}
-              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-all"
+              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-all"
             >
-              Cancel
+              Cancel (Esc)
             </button>
           </div>
         )}
@@ -1379,6 +1454,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "copy";
+              }}
+              onDrop={handleDropOnCanvas}
               className={`shadow-2xl border border-zinc-800/80 rounded-lg max-w-none ${
                 isCropMode || activeTool === "eyedropper"
                   ? "cursor-crosshair"
@@ -1399,7 +1480,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <Layers className="w-3.5 h-3.5 text-sky-400" />
               <span>Recent Captures ({captures.length})</span>
               <span className="text-[10px] text-zinc-500 font-normal">
-                (Click to switch • Drag card onto canvas to merge/combine)
+                (Drag card onto canvas OR click <b>+ Merge</b> to combine images)
               </span>
             </div>
 
@@ -1420,6 +1501,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   item={item}
                   isActive={item.id === record.id}
                   onClick={() => onSelectRecord(item)}
+                  onInsertMerge={() => insertImageOverlay(item.originalPath)}
                 />
               ))}
             </div>
@@ -1430,12 +1512,13 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   );
 };
 
-// Bottom Miniature Card (Draggable for Merging & Quick Delete)
+// Bottom Miniature Card (Draggable for Merging, 1-Click + Merge Button & Quick Delete)
 const BottomThumbnailCard: React.FC<{
   item: CaptureRecord;
   isActive: boolean;
   onClick: () => void;
-}> = ({ item, isActive, onClick }) => {
+  onInsertMerge: () => void;
+}> = ({ item, isActive, onClick, onInsertMerge }) => {
   const [thumbSrc, setThumbSrc] = useState<string>("");
 
   useEffect(() => {
@@ -1470,15 +1553,17 @@ const BottomThumbnailCard: React.FC<{
     <div
       draggable
       onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", item.originalPath);
         e.dataTransfer.setData("application/json", JSON.stringify(item));
+        e.dataTransfer.effectAllowed = "copy";
       }}
       onClick={onClick}
-      className={`group relative flex-shrink-0 w-28 h-16 rounded-lg overflow-hidden border cursor-pointer transition-all ${
+      className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-pointer transition-all ${
         isActive
           ? "border-sky-400 ring-2 ring-sky-500/40 scale-105 shadow-md shadow-sky-500/20"
-          : "border-zinc-800 hover:border-zinc-600 opacity-70 hover:opacity-100"
+          : "border-zinc-800 hover:border-zinc-600 opacity-75 hover:opacity-100"
       }`}
-      title="Click to switch • Drag to canvas to merge"
+      title="Click to edit • Drag or click '+ Merge' to combine onto current canvas"
     >
       {thumbSrc ? (
         <img
@@ -1492,16 +1577,30 @@ const BottomThumbnailCard: React.FC<{
         </div>
       )}
 
-      {/* Delete button on thumbnail */}
-      <button
-        onClick={handleDeleteItem}
-        className="absolute top-1 right-1 p-1 rounded bg-black/70 hover:bg-red-600 text-zinc-300 hover:text-white opacity-0 group-hover:opacity-100 transition-all shadow"
-        title="Delete this capture"
-      >
-        <Trash2 className="w-3 h-3" />
-      </button>
+      {/* Hover Action Overlay: + Merge Button & Delete Button */}
+      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onInsertMerge();
+          }}
+          className="px-2 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg transform hover:scale-105 transition-all"
+          title="Insert and Merge this image onto active canvas"
+        >
+          <PlusCircle className="w-3 h-3" />
+          <span>Merge</span>
+        </button>
 
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-zinc-300 font-mono flex items-center justify-between">
+        <button
+          onClick={handleDeleteItem}
+          className="p-1 rounded-md bg-zinc-800 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow"
+          title="Delete this capture"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-zinc-300 font-mono flex items-center justify-between pointer-events-none">
         <span>{item.width}x{item.height}</span>
       </div>
     </div>
@@ -1543,8 +1642,8 @@ function drawAnnotationObject(
     }
     if (img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, obj.x, obj.y, obj.width, obj.height);
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
+      ctx.lineWidth = 1.5;
       ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
     }
   } else if (obj.type === "pen") {
@@ -1748,14 +1847,14 @@ function drawCropOverlay(
   ch: number
 ) {
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
   ctx.fillRect(0, 0, cw, crop.y);
   ctx.fillRect(0, crop.y + crop.h, cw, ch - (crop.y + crop.h));
   ctx.fillRect(0, crop.y, crop.x, crop.h);
   ctx.fillRect(crop.x + crop.w, crop.y, cw - (crop.x + crop.w), crop.h);
 
   ctx.strokeStyle = "#10B981";
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.5;
   ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
   ctx.restore();
 }

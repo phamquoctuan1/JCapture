@@ -5,6 +5,7 @@ import { ThumbnailCard } from "./ThumbnailCard";
 
 interface RecentWorkspaceProps {
   captures: CaptureRecord[];
+  captureShortcut?: string;
   onOpenEditor: (record: CaptureRecord) => void;
   onTogglePin: (id: string, isPinned: boolean) => void;
   onDelete: (id: string) => void;
@@ -13,6 +14,7 @@ interface RecentWorkspaceProps {
 
 export const RecentWorkspace: React.FC<RecentWorkspaceProps> = ({
   captures,
+  captureShortcut = "Alt+A",
   onOpenEditor,
   onTogglePin,
   onDelete,
@@ -31,7 +33,7 @@ export const RecentWorkspace: React.FC<RecentWorkspaceProps> = ({
           No captures yet
         </h3>
         <p className="text-sm text-zinc-400 max-w-sm mb-6">
-          Press <kbd className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-sky-400 font-mono">Ctrl + Shift + A</kbd> or click below to capture any screen area.
+          Press <kbd className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-sky-400 font-mono font-bold">{captureShortcut}</kbd> or click below to capture any screen area.
         </p>
         <button
           onClick={onTriggerCapture}
