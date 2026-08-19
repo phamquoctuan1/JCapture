@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -74,7 +74,11 @@ export default function App() {
     };
   }, []);
 
+  const isCreatingBlankRef = useRef(false);
+
   const handleNewBlankCanvas = async () => {
+    if (isCreatingBlankRef.current) return;
+    isCreatingBlankRef.current = true;
     try {
       const blankRecord = await invoke<CaptureRecord>("create_blank_canvas", {
         width: 1600,
@@ -84,6 +88,10 @@ export default function App() {
       setActiveEditorRecord(blankRecord);
     } catch (err) {
       console.error("Failed to create blank canvas:", err);
+    } finally {
+      setTimeout(() => {
+        isCreatingBlankRef.current = false;
+      }, 300);
     }
   };
 
@@ -216,7 +224,6 @@ export default function App() {
             setInitialMergeConfig(undefined);
           }}
           onUpdateRecord={handleUpdateRecord}
-          onNewBlankCanvas={handleNewBlankCanvas}
         />
       )}
 

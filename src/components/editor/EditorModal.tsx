@@ -56,7 +56,6 @@ interface EditorModalProps {
   onSelectRecord?: (record: CaptureRecord) => void;
   onClose: () => void;
   onUpdateRecord: (record: CaptureRecord) => void;
-  onNewBlankCanvas?: () => void;
 }
 
 interface EditorHistorySnapshot {
@@ -168,7 +167,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   onSelectRecord,
   onClose,
   onUpdateRecord,
-  onNewBlankCanvas,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolType | "eyedropper">("select");
   const [currentColor, setCurrentColor] = useState<string>("#FFDE2A");
@@ -667,9 +665,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedId) handleDeleteSelected();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        if (onNewBlankCanvas) onNewBlankCanvas();
       } else if (e.ctrlKey && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) handleRedo();
