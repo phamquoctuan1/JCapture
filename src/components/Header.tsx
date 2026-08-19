@@ -63,15 +63,15 @@ export const Header: React.FC<HeaderProps> = ({
       className="h-12 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-md px-3 flex items-center justify-between select-none"
     >
       <div className="flex items-center gap-2.5 pointer-events-none">
-        <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-amber-400 via-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-500/20">
-          <Camera className="w-3.5 h-3.5 text-zinc-950 stroke-[2.5]" />
+        <div className="w-6 h-6 rounded-md bg-[#F36F21] flex items-center justify-center shadow-md shadow-orange-500/30 border border-orange-400/40">
+          <Camera className="w-3.5 h-3.5 text-white stroke-[2.5]" />
         </div>
         <div className="flex items-center gap-2">
           <span className="font-bold text-xs tracking-wider text-zinc-100 font-sans">
             JCapture
           </span>
-          <span className="text-[9px] uppercase font-semibold tracking-wider text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">
-            PRO
+          <span className="text-[9px] uppercase font-bold tracking-wider text-[#F36F21] bg-orange-950/70 px-1.5 py-0.5 rounded border border-orange-700/50">
+            JITS
           </span>
         </div>
       </div>
@@ -79,12 +79,12 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-1.5">
         <button
           onClick={onTriggerCapture}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs font-semibold transition-all shadow-md shadow-sky-600/20"
+          className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#F36F21] hover:bg-[#ff7d33] active:bg-[#d95d14] text-white text-xs font-semibold transition-all shadow-md shadow-orange-600/25"
           title={`Capture region (${captureShortcut})`}
         >
           <Camera className="w-3.5 h-3.5" />
           <span>Capture</span>
-          <kbd className="ml-1 text-[10px] bg-sky-700/80 px-1.5 py-0.5 rounded font-mono font-bold">
+          <kbd className="ml-1 text-[10px] bg-orange-800/80 px-1.5 py-0.5 rounded font-mono font-bold">
             {captureShortcut}
           </kbd>
         </button>

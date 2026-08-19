@@ -19,7 +19,7 @@ interface SettingsModalProps {
   onSettingsSaved?: (newSettings: AppSettings) => void;
 }
 
-const CURRENT_VERSION = "v0.2.5";
+const CURRENT_VERSION = "v0.2.6";
 const DEFAULT_REPO = "phamquoctuan1/JCapture";
 
 interface ReleaseAsset {
@@ -361,12 +361,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
 
               {updateStatus === "available" && latestRelease && (
-                <div className="space-y-2.5 bg-sky-950/40 p-3 rounded-lg border border-sky-800/40 text-[11px]">
-                  <div className="flex items-center justify-between text-sky-300 font-semibold">
+                <div className="space-y-2.5 bg-orange-950/30 p-3 rounded-lg border border-orange-700/40 text-[11px]">
+                  <div className="flex items-center justify-between text-orange-300 font-semibold">
                     <span className="text-xs">🎉 New version available: {latestRelease.tag_name}</span>
                     <button
                       onClick={handleOpenReleasePage}
-                      className="flex items-center gap-1 text-sky-400 hover:text-sky-200 underline text-[10px]"
+                      className="flex items-center gap-1 text-orange-400 hover:text-orange-200 underline text-[10px]"
                       title="View release notes on GitHub"
                     >
                       <span>GitHub</span>
@@ -379,17 +379,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </p>
                   )}
 
-                  {/* 1-Click Update Button */}
-                  <div className="pt-1">
+                  {/* 1-Click Update Button & Browser Download */}
+                  <div className="pt-1 flex flex-col gap-1.5">
                     <button
                       onClick={handleDownloadAndInstall}
                       disabled={isDownloading}
-                      className="w-full flex items-center justify-center gap-2 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 active:from-sky-700 active:to-indigo-700 disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-lg shadow-sky-600/20 transition-all"
+                      className="w-full flex items-center justify-center gap-2 py-2 bg-[#F36F21] hover:bg-[#ff7d33] active:bg-[#d95d14] disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-lg shadow-orange-600/25 transition-all"
                     >
                       <Download className={`w-3.5 h-3.5 ${isDownloading ? "animate-bounce" : ""}`} />
                       <span>
                         {isDownloading ? "Downloading & Launching Update..." : "Download & Install Update Now"}
                       </span>
+                    </button>
+
+                    <button
+                      onClick={handleOpenReleasePage}
+                      className="w-full py-1.5 text-zinc-400 hover:text-zinc-200 text-[10px] flex items-center justify-center gap-1 hover:underline"
+                    >
+                      <span>Or download Portable (.exe) via Browser</span>
+                      <ExternalLink className="w-3 h-3" />
                     </button>
                   </div>
 
@@ -402,9 +410,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
 
               {updateStatus === "error" && (
-                <div className="flex items-center gap-1.5 text-amber-400 text-[11px] bg-amber-950/40 p-2 rounded border border-amber-800/40">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  <span>{updateError || "Could not reach GitHub Releases."}</span>
+                <div className="space-y-2 bg-amber-950/40 p-2.5 rounded-lg border border-amber-800/40 text-[11px]">
+                  <div className="flex items-center gap-1.5 text-amber-400">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>{updateError || "Could not reach GitHub Releases."}</span>
+                  </div>
+                  <button
+                    onClick={handleOpenReleasePage}
+                    className="w-full py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 border border-zinc-700 transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-[#F36F21]" />
+                    <span>Open GitHub Download Page in Browser</span>
+                  </button>
                 </div>
               )}
             </div>

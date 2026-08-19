@@ -335,19 +335,53 @@ pub async fn download_and_install_update(
     let installer_path = temp_dir.join("JCapture_setup_update.exe");
     let dest_str = installer_path.to_string_lossy().to_string();
 
-    let ps_cmd = format!(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'JCapture-Updater'); $wc.DownloadFile('{}', '{}')",
-        download_url, dest_str
-    );
+    // 1. Try native curl.exe with -L for seamless GitHub / S3 redirects
+    let curl_res = std::process::Command::new("curl.exe")
+        .args([
+            "-L", // Follow HTTP 302 / 307 redirects to AWS S3
+            "-f", // Fail on HTTP 4xx / 5xx
+            "-s", // Silent
+            "-S", // Show errors if any
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JCapture-Updater",
+            "-o", &dest_str,
+            &download_url,
+        ])
+        .output();
 
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-        .output()
-        .map_err(|e| format!("Failed to execute download: {}", e))?;
+    let mut download_succeeded = false;
+    if let Ok(out) = curl_res {
+        if out.status.success() && installer_path.exists() {
+            if let Ok(meta) = std::fs::metadata(&installer_path) {
+                if meta.len() > 1024 * 500 {
+                    download_succeeded = true;
+                }
+            }
+        }
+    }
 
-    if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Download failed: {}", err_msg));
+    // 2. Fallback: PowerShell Invoke-WebRequest with TLS 1.2 / TLS 1.3
+    if !download_succeeded {
+        let ps_cmd = format!(
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; Invoke-WebRequest -Uri '{}' -OutFile '{}' -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' -MaximumRedirection 10",
+            download_url, dest_str
+        );
+        let ps_res = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+            .output();
+
+        if let Ok(out) = ps_res {
+            if out.status.success() && installer_path.exists() {
+                if let Ok(meta) = std::fs::metadata(&installer_path) {
+                    if meta.len() > 1024 * 500 {
+                        download_succeeded = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if !download_succeeded {
+        return Err("Could not download installer directly. Please click 'Download via Browser'.".to_string());
     }
 
     let _ = std::process::Command::new(&installer_path).spawn();
