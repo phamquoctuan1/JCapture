@@ -201,24 +201,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Region Capture Hotkey */}
-            <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <span>Capture Region:</span>
-                <button
-                  onClick={() => setIsRecordingCapture(true)}
-                  className={`px-3 py-1 rounded font-mono font-bold text-xs transition-all ${
-                    isRecordingCapture
-                      ? "bg-amber-500 text-black ring-2 ring-amber-400 animate-pulse"
-                      : "bg-zinc-800 hover:bg-zinc-700 text-sky-400 border border-zinc-700"
-                  }`}
-                >
-                  {isRecordingCapture ? "Press any key..." : settings.hotkeyCapture}
-                </button>
+            <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-300">Capture Shortcut:</span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={settings.hotkeyCapture}
+                    onChange={(e) => setSettings({ ...settings, hotkeyCapture: e.target.value })}
+                    className="w-32 bg-zinc-900 border border-zinc-700 px-2 py-1 rounded text-sky-400 font-mono text-xs text-center focus:outline-none focus:border-sky-500"
+                    placeholder="e.g. Alt+A"
+                  />
+                  <button
+                    onClick={() => setIsRecordingCapture(!isRecordingCapture)}
+                    className={`px-2.5 py-1 rounded font-mono font-semibold text-xs transition-all ${
+                      isRecordingCapture
+                        ? "bg-amber-500 text-black ring-2 ring-amber-400 animate-pulse"
+                        : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                    }`}
+                    title="Click then press any key combination on keyboard"
+                  >
+                    {isRecordingCapture ? "Press key..." : "Record"}
+                  </button>
+                </div>
               </div>
 
               {/* Presets */}
-              <div className="pt-1 flex flex-wrap gap-1">
-                <span className="text-[10px] text-zinc-400 self-center mr-1">Presets:</span>
+              <div className="pt-1 flex flex-wrap gap-1 items-center">
+                <span className="text-[10px] text-zinc-400 mr-1">Presets:</span>
                 {PRESET_SHORTCUTS.map((preset) => (
                   <button
                     key={preset}

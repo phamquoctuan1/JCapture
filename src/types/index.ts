@@ -88,10 +88,24 @@ export interface TextObject {
   type: "text";
   x: number;
   y: number;
+  width?: number;
+  height?: number;
   text: string;
   fontSize: number;
   color: string;
   bgColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
+}
+
+export interface ImageOverlayObject {
+  id: string;
+  type: "image";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  src: string;
 }
 
 export interface HighlightObject {
@@ -133,6 +147,7 @@ export type AnnotationObject =
   | LineObject
   | PenObject
   | TextObject
+  | ImageOverlayObject
   | HighlightObject
   | BlurObject
   | StepBadgeObject;

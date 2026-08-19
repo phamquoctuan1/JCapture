@@ -32,6 +32,7 @@ import {
   AnnotationObject,
   AnnotationProject,
   CaptureRecord,
+  ImageOverlayObject,
   PenObject,
   TextObject,
   ToolType,
@@ -45,9 +46,8 @@ interface EditorModalProps {
   onUpdateRecord: (record: CaptureRecord) => void;
 }
 
-// Extended rich color palette with user's brand bright yellow (#FFDE2A)
 const COLORS = [
-  "#FFDE2A", // User Bright Yellow
+  "#FFDE2A", // User Brand Bright Yellow
   "#EF4444", // Red
   "#F97316", // Orange
   "#EAB308", // Yellow
@@ -61,6 +61,9 @@ const COLORS = [
 ];
 
 const STROKE_WIDTHS = [2, 4, 6, 8, 12];
+
+// Cache for loaded overlay images
+const overlayImageCache = new Map<string, HTMLImageElement>();
 
 export const EditorModal: React.FC<EditorModalProps> = ({
   record,
@@ -77,8 +80,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   // Zoom & Viewport state
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-
-  // Bottom dock collapse state
   const [showBottomDock, setShowBottomDock] = useState<boolean>(true);
 
   const [objects, setObjects] = useState<AnnotationObject[]>([]);
@@ -86,20 +87,26 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const [history, setHistory] = useState<AnnotationObject[][]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  // Inline Text Editor State
-  const [inlineText, setInlineText] = useState<{
+  // Text Box Editor State (placed at dragged rectangle)
+  const [textBoxEditor, setTextBoxEditor] = useState<{
     visible: boolean;
     x: number;
     y: number;
+    width: number;
+    height: number;
     text: string;
     fontSize: number;
+    hasBorder: boolean;
     hasBg: boolean;
   }>({
     visible: false,
     x: 0,
     y: 0,
+    width: 220,
+    height: 80,
     text: "",
-    fontSize: 24,
+    fontSize: 22,
+    hasBorder: true,
     hasBg: true,
   });
 
@@ -120,6 +127,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const dragInitialObjRef = useRef<AnnotationObject | null>(null);
   const startPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const currentTempObjectRef = useRef<AnnotationObject | null>(null);
+  const internalCopiedObjectRef = useRef<AnnotationObject | null>(null);
 
   // 1. Load Background Image & Project Annotations
   useEffect(() => {
@@ -150,6 +158,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             setObjects(project.objects);
             setHistory([project.objects]);
             setHistoryIndex(0);
+
+            // Pre-load any image overlays into memory cache
+            for (const obj of project.objects) {
+              if (obj.type === "image" && !overlayImageCache.has(obj.src)) {
+                const overlayImg = new Image();
+                overlayImg.src = obj.src;
+                overlayImageCache.set(obj.src, overlayImg);
+              }
+            }
 
             const maxStep = project.objects
               .filter((o): o is import("../../types").StepBadgeObject => o.type === "stepBadge")
@@ -223,15 +240,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      if (e.deltaY < 0) {
-        handleZoomIn();
-      } else {
-        handleZoomOut();
-      }
+      if (e.deltaY < 0) handleZoomIn();
+      else handleZoomOut();
     }
   };
 
-  // Eyedropper Tool handler (Screen/Canvas pipette)
+  // Eyedropper handler
   const handleTriggerEyedropper = async () => {
     if ("EyeDropper" in window) {
       try {
@@ -242,7 +256,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           setActiveTool("select");
         }
       } catch {
-        // Fallback to canvas sampling mode
         setActiveTool("eyedropper");
       }
     } else {
@@ -250,10 +263,109 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  // Keyboard shortcut listener
+  // Export / Copy merged image
+  const handleCopyMerged = useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    try {
+      const dataUrl = canvas.toDataURL("image/png");
+      await invoke("copy_image_base64_to_clipboard", { base64Data: dataUrl });
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Failed to copy edited image:", err);
+    }
+  }, []);
+
+  const handleExportImageAs = useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    try {
+      const dataUrl = canvas.toDataURL("image/png");
+      const defaultName = `JCapture_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.png`;
+      const savedPath = await invoke<string | null>("export_image_as_dialog", {
+        base64Data: dataUrl,
+        defaultName,
+      });
+
+      if (savedPath) {
+        setExported(true);
+        setTimeout(() => setExported(false), 1500);
+      }
+    } catch (err) {
+      console.error("Failed to export image:", err);
+    }
+  }, []);
+
+  const handleSaveProject = useCallback(async () => {
+    if (!bgImage) return;
+
+    const project: AnnotationProject = {
+      version: 1,
+      captureId: record.id,
+      canvasWidth: bgImage.naturalWidth,
+      canvasHeight: bgImage.naturalHeight,
+      objects,
+    };
+
+    try {
+      const projectPath = await invoke<string>("save_annotation_project", {
+        captureId: record.id,
+        jsonContent: JSON.stringify(project, null, 2),
+      });
+
+      onUpdateRecord({ ...record, projectPath });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch (err) {
+      console.error("Failed to save project:", err);
+    }
+  }, [bgImage, record, objects, onUpdateRecord]);
+
+  // Insert image overlay onto canvas (From paste or drag-and-drop merge)
+  const insertImageOverlay = useCallback((src: string, dropX?: number, dropY?: number) => {
+    const img = new Image();
+    img.src = src;
+    img.onload = () => {
+      overlayImageCache.set(src, img);
+
+      const maxDimension = 400;
+      let w = img.naturalWidth || 300;
+      let h = img.naturalHeight || 200;
+
+      if (w > maxDimension || h > maxDimension) {
+        const ratio = Math.min(maxDimension / w, maxDimension / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+
+      const canvas = canvasRef.current;
+      const posX = dropX !== undefined ? dropX : canvas ? Math.round((canvas.width - w) / 2) : 50;
+      const posY = dropY !== undefined ? dropY : canvas ? Math.round((canvas.height - h) / 2) : 50;
+
+      const newId = `img_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const imgObj: ImageOverlayObject = {
+        id: newId,
+        type: "image",
+        x: posX,
+        y: posY,
+        width: w,
+        height: h,
+        src,
+      };
+
+      pushState([...objects, imgObj]);
+      setSelectedId(newId);
+      setActiveTool("select");
+    };
+  }, [objects, pushState]);
+
+  // Keyboard shortcut listener (Ctrl+S, Ctrl+C, Ctrl+V, Undo, Redo, Delete)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (inlineText.visible) return;
+      if (textBoxEditor.visible) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedId) {
@@ -264,6 +376,25 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         else handleUndo();
       } else if (e.ctrlKey && e.key.toLowerCase() === "y") {
         handleRedo();
+      } else if (e.ctrlKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        handleExportImageAs();
+      } else if (e.ctrlKey && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        if (selectedId) {
+          const selObj = objects.find((o) => o.id === selectedId);
+          if (selObj) internalCopiedObjectRef.current = selObj;
+        }
+        handleCopyMerged();
+      } else if (e.ctrlKey && e.key.toLowerCase() === "v") {
+        if (internalCopiedObjectRef.current) {
+          const copied = internalCopiedObjectRef.current;
+          const newId = `obj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+          const pastedObj = moveObjectFromOrigin(copied, 20, 20);
+          pastedObj.id = newId;
+          pushState([...objects, pastedObj]);
+          setSelectedId(newId);
+        }
       } else if (e.ctrlKey && (e.key === "=" || e.key === "+")) {
         e.preventDefault();
         handleZoomIn();
@@ -284,9 +415,47 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
     };
 
+    // Paste handler for system clipboard images (e.g. from browser or screenshot)
+    const handlePaste = (e: ClipboardEvent) => {
+      if (textBoxEditor.visible) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+              const src = evt.target?.result as string;
+              if (src) insertImageOverlay(src);
+            };
+            reader.readAsDataURL(blob);
+          }
+        }
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, isCropMode, inlineText.visible, activeTool, handleDeleteSelected, handleUndo, handleRedo]);
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [
+    selectedId,
+    isCropMode,
+    textBoxEditor.visible,
+    activeTool,
+    objects,
+    handleDeleteSelected,
+    handleUndo,
+    handleRedo,
+    handleCopyMerged,
+    handleExportImageAs,
+    insertImageOverlay,
+    pushState,
+  ]);
 
   // 2. Render Canvas Frame
   useEffect(() => {
@@ -354,7 +523,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const { x, y } = getCanvasCoords(e);
     startPosRef.current = { x, y };
 
-    // Canvas Eyedropper mode: Sample pixel color
     if (activeTool === "eyedropper") {
       const canvas = canvasRef.current;
       if (canvas) {
@@ -388,15 +556,20 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
+    // Text tool: Drag a box to place styled text container!
     if (activeTool === "text") {
-      setInlineText({
-        visible: true,
+      isDrawingRef.current = true;
+      currentTempObjectRef.current = {
+        id: "temp_text",
+        type: "rect",
         x,
         y,
-        text: "",
-        fontSize: Math.max(20, currentStrokeWidth * 5),
-        hasBg: true,
-      });
+        width: 0,
+        height: 0,
+        color: currentColor,
+        strokeWidth: currentStrokeWidth,
+        fillColor: "rgba(15, 23, 42, 0.5)",
+      };
       return;
     }
 
@@ -563,7 +736,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isCropMode) {
       isDrawingRef.current = false;
       return;
@@ -578,6 +751,31 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
+
+    // Finish dragging box for Text Tool -> Open Text Box editor!
+    if (activeTool === "text") {
+      const { x, y } = getCanvasCoords(e);
+      const start = startPosRef.current;
+      currentTempObjectRef.current = null;
+
+      const minX = Math.min(start.x, x);
+      const minY = Math.min(start.y, y);
+      const boxW = Math.max(160, Math.abs(x - start.x));
+      const boxH = Math.max(60, Math.abs(y - start.y));
+
+      setTextBoxEditor({
+        visible: true,
+        x: minX,
+        y: minY,
+        width: boxW,
+        height: boxH,
+        text: "",
+        fontSize: Math.max(18, currentStrokeWidth * 5),
+        hasBorder: true,
+        hasBg: true,
+      });
+      return;
+    }
 
     if (currentTempObjectRef.current) {
       const finalObj = currentTempObjectRef.current;
@@ -600,27 +798,32 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
-  const handleCommitInlineText = () => {
-    if (!inlineText.text.trim()) {
-      setInlineText((prev) => ({ ...prev, visible: false }));
+  // Commit Text Box with customizable border & background
+  const handleCommitTextBox = () => {
+    if (!textBoxEditor.text.trim()) {
+      setTextBoxEditor((prev) => ({ ...prev, visible: false }));
       return;
     }
 
-    const newId = `obj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const newId = `txt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const textObj: TextObject = {
       id: newId,
       type: "text",
-      x: inlineText.x,
-      y: inlineText.y,
-      text: inlineText.text,
-      fontSize: inlineText.fontSize,
+      x: textBoxEditor.x,
+      y: textBoxEditor.y,
+      width: textBoxEditor.width,
+      height: textBoxEditor.height,
+      text: textBoxEditor.text,
+      fontSize: textBoxEditor.fontSize,
       color: currentColor,
-      bgColor: inlineText.hasBg ? "rgba(15, 23, 42, 0.85)" : undefined,
+      bgColor: textBoxEditor.hasBg ? "rgba(15, 23, 42, 0.9)" : undefined,
+      borderColor: textBoxEditor.hasBorder ? currentColor : undefined,
+      borderWidth: textBoxEditor.hasBorder ? currentStrokeWidth : undefined,
     };
 
     pushState([...objects, textObj]);
     setSelectedId(newId);
-    setInlineText((prev) => ({ ...prev, visible: false, text: "" }));
+    setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "" }));
     setActiveTool("select");
   };
 
@@ -666,7 +869,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       const updated = objects.map((obj) => {
         if (obj.id !== selectedId) return obj;
         if ("color" in obj) {
-          return { ...obj, color: newColor };
+          return { ...obj, color: newColor, borderColor: "borderColor" in obj ? newColor : undefined };
         }
         return obj;
       });
@@ -682,69 +885,40 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         if ("strokeWidth" in obj) {
           return { ...obj, strokeWidth: newWidth };
         }
+        if ("borderWidth" in obj) {
+          return { ...obj, borderWidth: newWidth };
+        }
         return obj;
       });
       pushState(updated);
     }
   };
 
-  const handleCopyMerged = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // Drop capture onto canvas to merge/combine
+  const handleDropOnCanvas = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const dataStr = e.dataTransfer.getData("application/json");
+    if (!dataStr) return;
 
     try {
-      const dataUrl = canvas.toDataURL("image/png");
-      await invoke("copy_image_base64_to_clipboard", { base64Data: dataUrl });
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch (err) {
-      console.error("Failed to copy edited image:", err);
-    }
-  };
-
-  const handleExportImageAs = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    try {
-      const dataUrl = canvas.toDataURL("image/png");
-      const defaultName = `JCapture_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.png`;
-      const savedPath = await invoke<string | null>("export_image_as_dialog", {
-        base64Data: dataUrl,
-        defaultName,
+      const item: CaptureRecord = JSON.parse(dataStr);
+      const dataUrl = await invoke<string>("read_image_base64", {
+        filePath: item.originalPath,
       });
 
-      if (savedPath) {
-        setExported(true);
-        setTimeout(() => setExported(false), 1500);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const dropX = Math.round((e.clientX - rect.left) * scaleX);
+        const dropY = Math.round((e.clientY - rect.top) * scaleY);
+        insertImageOverlay(dataUrl, dropX, dropY);
+      } else {
+        insertImageOverlay(dataUrl);
       }
     } catch (err) {
-      console.error("Failed to export image:", err);
-    }
-  };
-
-  const handleSaveProject = async () => {
-    if (!bgImage) return;
-
-    const project: AnnotationProject = {
-      version: 1,
-      captureId: record.id,
-      canvasWidth: bgImage.naturalWidth,
-      canvasHeight: bgImage.naturalHeight,
-      objects,
-    };
-
-    try {
-      const projectPath = await invoke<string>("save_annotation_project", {
-        captureId: record.id,
-        jsonContent: JSON.stringify(project, null, 2),
-      });
-
-      onUpdateRecord({ ...record, projectPath });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
-    } catch (err) {
-      console.error("Failed to save project:", err);
+      console.error("Failed to drop and insert image overlay:", err);
     }
   };
 
@@ -815,7 +989,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               setIsCropMode(false);
             }}
             icon={<Type className="w-4 h-4" />}
-            label="Text (T)"
+            label="Text Box (Drag box with border color)"
           />
           <ToolButton
             active={activeTool === "highlight" && !isCropMode}
@@ -901,7 +1075,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         <div className="flex items-center gap-2">
           {/* Color Palette + Eyedropper */}
           <div className="flex items-center gap-1.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
-            {/* Extended Color Palette */}
             {COLORS.map((c) => (
               <button
                 key={c}
@@ -917,7 +1090,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             ))}
 
             {/* Custom Color Picker Input */}
-            <div className="relative flex items-center justify-center w-4 h-4 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Choose Custom Color">
+            <div className="relative flex items-center justify-center w-4 h-4 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Custom Color Picker">
               <input
                 type="color"
                 value={currentColor}
@@ -927,7 +1100,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <div className="w-full h-full" style={{ backgroundColor: currentColor }} />
             </div>
 
-            {/* Eyedropper / Pipette Button */}
+            {/* Eyedropper Tool */}
             <button
               onClick={handleTriggerEyedropper}
               className={`p-1 rounded transition-colors ${
@@ -935,7 +1108,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   ? "bg-amber-500 text-black"
                   : "text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
               }`}
-              title="Eyedropper / Bút chọn màu (Pick any color)"
+              title="Eyedropper / Bút chọn màu (Click to pick color)"
             >
               <Pipette className="w-3.5 h-3.5" />
             </button>
@@ -1004,25 +1177,25 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           <button
             onClick={handleCopyMerged}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-sky-600/20"
-            title="Copy final image to clipboard (Ctrl+C)"
+            title="Copy result image to clipboard (Ctrl+C)"
           >
             {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? "Copied!" : "Copy Result"}</span>
+            <span>{copied ? "Copied!" : "Copy (Ctrl+C)"}</span>
           </button>
 
           <button
             onClick={handleExportImageAs}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-emerald-600/20"
-            title="Save annotated image as PNG / JPG"
+            title="Save annotated image as PNG / JPG (Ctrl+S)"
           >
             {exported ? <Check className="w-3.5 h-3.5" /> : <Download className="w-3.5 h-3.5" />}
-            <span>{exported ? "Saved!" : "Save Image As..."}</span>
+            <span>{exported ? "Saved!" : "Save As (Ctrl+S)"}</span>
           </button>
 
           <button
             onClick={handleSaveProject}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold transition-all border border-zinc-700"
-            title="Save vector project (can edit later)"
+            title="Save vector project (re-editable later)"
           >
             {saved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Save className="w-3.5 h-3.5" />}
             <span>{saved ? "Saved" : "Save Project"}</span>
@@ -1038,10 +1211,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         </div>
       </div>
 
-      {/* Main Canvas Viewport (Scrollable & Zoomable) */}
+      {/* Main Canvas Viewport (Scrollable & Zoomable & Drop-target for Merging images) */}
       <div
         ref={containerRef}
         onWheel={handleWheel}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={handleDropOnCanvas}
         className="flex-1 overflow-auto bg-zinc-950 flex items-center justify-center p-8 relative"
       >
         {/* Floating Crop Actions Banner */}
@@ -1071,37 +1249,49 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
         )}
 
-        {/* Inline Floating Text Card Editor */}
-        {inlineText.visible && (
-          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-sky-500/80 p-3 rounded-xl shadow-2xl flex flex-col gap-2 min-w-[320px] animate-in slide-in-from-top-2">
+        {/* Text Box Modal Editor (Appears when dragging a text box) */}
+        {textBoxEditor.visible && (
+          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-amber-500/80 p-3 rounded-xl shadow-2xl flex flex-col gap-2 min-w-[340px] animate-in slide-in-from-top-2">
             <div className="flex items-center justify-between text-xs text-zinc-300">
-              <span className="font-semibold flex items-center gap-1 text-sky-400">
+              <span className="font-semibold flex items-center gap-1 text-amber-400">
                 <Type className="w-3.5 h-3.5" />
-                Add Styled Text
+                Text Box with Border
               </span>
-              <button
-                onClick={() => setInlineText((prev) => ({ ...prev, hasBg: !prev.hasBg }))}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
-                  inlineText.hasBg
-                    ? "bg-sky-600/30 text-sky-300 border-sky-500/40"
-                    : "bg-zinc-800 text-zinc-400 border-zinc-700"
-                }`}
-              >
-                {inlineText.hasBg ? "Badge BG: ON" : "Badge BG: OFF"}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBorder: !prev.hasBorder }))}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                    textBoxEditor.hasBorder
+                      ? "bg-amber-600/30 text-amber-300 border-amber-500/40"
+                      : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                  }`}
+                >
+                  {textBoxEditor.hasBorder ? "Border: ON" : "Border: OFF"}
+                </button>
+                <button
+                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBg: !prev.hasBg }))}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                    textBoxEditor.hasBg
+                      ? "bg-sky-600/30 text-sky-300 border-sky-500/40"
+                      : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                  }`}
+                >
+                  {textBoxEditor.hasBg ? "Fill: ON" : "Fill: OFF"}
+                </button>
+              </div>
             </div>
 
-            <input
-              type="text"
+            <textarea
               autoFocus
-              value={inlineText.text}
-              onChange={(e) => setInlineText((prev) => ({ ...prev, text: e.target.value }))}
+              rows={3}
+              value={textBoxEditor.text}
+              onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, text: e.target.value }))}
               onKeyDown={(e) => {
-                if (e.key === "Enter") handleCommitInlineText();
-                if (e.key === "Escape") setInlineText((prev) => ({ ...prev, visible: false }));
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleCommitTextBox();
+                if (e.key === "Escape") setTextBoxEditor((prev) => ({ ...prev, visible: false }));
               }}
-              placeholder="Type annotation text..."
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-sky-500"
+              placeholder="Type text in box (Ctrl+Enter to finish)..."
+              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-amber-500 resize-none font-medium"
             />
 
             <div className="flex items-center justify-between pt-1">
@@ -1109,10 +1299,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                 {[16, 22, 28, 36].map((sz) => (
                   <button
                     key={sz}
-                    onClick={() => setInlineText((prev) => ({ ...prev, fontSize: sz }))}
+                    onClick={() => setTextBoxEditor((prev) => ({ ...prev, fontSize: sz }))}
                     className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
-                      inlineText.fontSize === sz
-                        ? "bg-sky-600 text-white font-bold"
+                      textBoxEditor.fontSize === sz
+                        ? "bg-amber-600 text-white font-bold"
                         : "text-zinc-400 hover:text-zinc-200"
                     }`}
                   >
@@ -1123,16 +1313,16 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => setInlineText((prev) => ({ ...prev, visible: false }))}
+                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, visible: false }))}
                   className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleCommitInlineText}
-                  className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-md transition-colors shadow-md shadow-sky-600/20"
+                  onClick={handleCommitTextBox}
+                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-black text-xs font-bold rounded-md transition-colors shadow-md shadow-amber-600/20"
                 >
-                  Add Text
+                  Done (Ctrl+Enter)
                 </button>
               </div>
             </div>
@@ -1169,13 +1359,16 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         )}
       </div>
 
-      {/* Bottom Filmstrip Dock: Recent Captures Quick-Switch */}
+      {/* Bottom Filmstrip Dock: Drag image onto canvas to merge / Click to switch */}
       {captures.length > 0 && onSelectRecord && (
         <div className="border-t border-zinc-800/80 bg-zinc-900/90 backdrop-blur-md px-3 py-2 flex flex-col gap-1.5 shadow-2xl transition-all">
           <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-400">
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-400">
               <Layers className="w-3.5 h-3.5 text-sky-400" />
               <span>Recent Captures ({captures.length})</span>
+              <span className="text-[10px] text-zinc-500 font-normal">
+                (Click to switch • Drag card onto canvas to merge/combine)
+              </span>
             </div>
 
             <button
@@ -1205,7 +1398,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   );
 };
 
-// Miniature Bottom Thumbnail Card
+// Bottom Miniature Card (Draggable for Merging & Quick Delete)
 const BottomThumbnailCard: React.FC<{
   item: CaptureRecord;
   isActive: boolean;
@@ -1231,21 +1424,36 @@ const BottomThumbnailCard: React.FC<{
     };
   }, [item.thumbnailPath]);
 
+  const handleDeleteItem = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await invoke("delete_capture", { id: item.id });
+      // Triggers focus refresh automatically
+      window.dispatchEvent(new Event("focus"));
+    } catch (err) {
+      console.error("Failed to delete capture:", err);
+    }
+  };
+
   return (
-    <button
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/json", JSON.stringify(item));
+      }}
       onClick={onClick}
-      className={`group relative flex-shrink-0 w-24 h-14 rounded-lg overflow-hidden border transition-all ${
+      className={`group relative flex-shrink-0 w-28 h-16 rounded-lg overflow-hidden border cursor-pointer transition-all ${
         isActive
           ? "border-sky-400 ring-2 ring-sky-500/40 scale-105 shadow-md shadow-sky-500/20"
           : "border-zinc-800 hover:border-zinc-600 opacity-70 hover:opacity-100"
       }`}
-      title={`Switch to ${item.width}x${item.height} image`}
+      title="Click to switch • Drag to canvas to merge"
     >
       {thumbSrc ? (
         <img
           src={thumbSrc}
           alt="Thumbnail"
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover pointer-events-none"
         />
       ) : (
         <div className="w-full h-full bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-600">
@@ -1253,10 +1461,19 @@ const BottomThumbnailCard: React.FC<{
         </div>
       )}
 
+      {/* Delete button on thumbnail */}
+      <button
+        onClick={handleDeleteItem}
+        className="absolute top-1 right-1 p-1 rounded bg-black/70 hover:bg-red-600 text-zinc-300 hover:text-white opacity-0 group-hover:opacity-100 transition-all shadow"
+        title="Delete this capture"
+      >
+        <Trash2 className="w-3 h-3" />
+      </button>
+
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-zinc-300 font-mono flex items-center justify-between">
         <span>{item.width}x{item.height}</span>
       </div>
-    </button>
+    </div>
   );
 };
 
@@ -1286,7 +1503,21 @@ function drawAnnotationObject(
 ) {
   ctx.save();
 
-  if (obj.type === "pen") {
+  if (obj.type === "image") {
+    let img = overlayImageCache.get(obj.src);
+    if (!img) {
+      img = new Image();
+      img.src = obj.src;
+      overlayImageCache.set(obj.src, img);
+    }
+    if (img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, obj.x, obj.y, obj.width, obj.height);
+      // Border outline for overlay image
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+    }
+  } else if (obj.type === "pen") {
     if (obj.points.length > 0) {
       ctx.strokeStyle = obj.color;
       ctx.lineWidth = obj.strokeWidth;
@@ -1355,36 +1586,48 @@ function drawAnnotationObject(
     ctx.lineTo(obj.endX, obj.endY);
     ctx.stroke();
   } else if (obj.type === "text") {
-    ctx.font = `600 ${obj.fontSize}px 'Segoe UI', system-ui, sans-serif`;
+    const fontSize = obj.fontSize || 22;
+    ctx.font = `600 ${fontSize}px 'Segoe UI', system-ui, sans-serif`;
 
-    if (obj.bgColor) {
-      const metrics = ctx.measureText(obj.text);
-      const textWidth = metrics.width;
-      const padX = 10;
-      const padY = 6;
-      const rx = obj.x - padX;
-      const ry = obj.y - obj.fontSize - padY / 2;
-      const rw = textWidth + padX * 2;
-      const rh = obj.fontSize + padY * 2;
-      const radius = 6;
+    const lines = obj.text.split("\n");
+    const lineHeight = fontSize * 1.35;
+    const padding = 10;
 
-      ctx.fillStyle = obj.bgColor;
-      ctx.beginPath();
-      ctx.roundRect(rx, ry, rw, rh, radius);
-      ctx.fill();
+    let boxW = obj.width || 0;
+    let boxH = obj.height || 0;
 
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    } else {
-      ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetX = 1;
-      ctx.shadowOffsetY = 1;
+    if (!boxW || !boxH) {
+      let maxLineWidth = 0;
+      for (const line of lines) {
+        maxLineWidth = Math.max(maxLineWidth, ctx.measureText(line).width);
+      }
+      boxW = maxLineWidth + padding * 2;
+      boxH = lines.length * lineHeight + padding * 2;
     }
 
+    // Draw background card
+    if (obj.bgColor) {
+      ctx.fillStyle = obj.bgColor;
+      ctx.beginPath();
+      ctx.roundRect(obj.x, obj.y, boxW, boxH, 8);
+      ctx.fill();
+    }
+
+    // Draw border outline
+    if (obj.borderColor) {
+      ctx.strokeStyle = obj.borderColor;
+      ctx.lineWidth = obj.borderWidth || 2;
+      ctx.beginPath();
+      ctx.roundRect(obj.x, obj.y, boxW, boxH, 8);
+      ctx.stroke();
+    }
+
+    // Draw text lines
     ctx.fillStyle = obj.color;
-    ctx.fillText(obj.text, obj.x, obj.y);
+    ctx.textBaseline = "top";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], obj.x + padding, obj.y + padding + i * lineHeight);
+    }
   } else if (obj.type === "highlight") {
     ctx.fillStyle = obj.color;
     ctx.globalAlpha = obj.opacity;
@@ -1491,7 +1734,14 @@ function drawCropOverlay(
 }
 
 function getObjectBoundingBox(obj: AnnotationObject): { minX: number; minY: number; maxX: number; maxY: number } {
-  if (obj.type === "pen") {
+  if (obj.type === "image" || obj.type === "rect" || obj.type === "highlight" || obj.type === "blur") {
+    return {
+      minX: obj.x,
+      minY: obj.y,
+      maxX: obj.x + obj.width,
+      maxY: obj.y + obj.height,
+    };
+  } else if (obj.type === "pen") {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of obj.points) {
       minX = Math.min(minX, p.x);
@@ -1506,13 +1756,6 @@ function getObjectBoundingBox(obj: AnnotationObject): { minX: number; minY: numb
       minY: Math.min(obj.startY, obj.endY),
       maxX: Math.max(obj.startX, obj.endX),
       maxY: Math.max(obj.startY, obj.endY),
-    };
-  } else if (obj.type === "rect" || obj.type === "highlight" || obj.type === "blur") {
-    return {
-      minX: obj.x,
-      minY: obj.y,
-      maxX: obj.x + obj.width,
-      maxY: obj.y + obj.height,
     };
   } else if (obj.type === "ellipse") {
     return {
@@ -1530,10 +1773,10 @@ function getObjectBoundingBox(obj: AnnotationObject): { minX: number; minY: numb
     };
   } else if (obj.type === "text") {
     return {
-      minX: obj.x - 10,
-      minY: obj.y - obj.fontSize - 6,
-      maxX: obj.x + obj.text.length * (obj.fontSize * 0.6) + 10,
-      maxY: obj.y + 8,
+      minX: obj.x,
+      minY: obj.y,
+      maxX: obj.x + (obj.width || 200),
+      maxY: obj.y + (obj.height || 60),
     };
   }
   return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -1559,13 +1802,15 @@ function moveObjectFromOrigin(initial: AnnotationObject, dx: number, dy: number)
       endX: initial.endX + dx,
       endY: initial.endY + dy,
     };
-  } else if (initial.type === "rect" || initial.type === "highlight" || initial.type === "blur") {
-    return {
-      ...initial,
-      x: initial.x + dx,
-      y: initial.y + dy,
-    };
-  } else if (initial.type === "ellipse" || initial.type === "stepBadge" || initial.type === "text") {
+  } else if (
+    initial.type === "image" ||
+    initial.type === "rect" ||
+    initial.type === "highlight" ||
+    initial.type === "blur" ||
+    initial.type === "text" ||
+    initial.type === "ellipse" ||
+    initial.type === "stepBadge"
+  ) {
     return {
       ...initial,
       x: initial.x + dx,

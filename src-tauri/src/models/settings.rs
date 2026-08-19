@@ -14,7 +14,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            hotkey_capture: "Ctrl+Shift+A".to_string(),
+            hotkey_capture: "Alt+A".to_string(),
             hotkey_record: "Ctrl+Shift+R".to_string(),
             auto_start_with_windows: false,
             copy_to_clipboard_on_capture: true,
