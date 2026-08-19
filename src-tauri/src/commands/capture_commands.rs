@@ -1,0 +1,222 @@
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
+
+use crate::models::{AppSettings, CaptureRecord};
+use crate::native::{copy_rgba_to_clipboard, open_capture_overlay};
+use crate::storage::{read_project_json, save_project_json, AppPaths, Database};
+
+pub struct AppState {
+    pub paths: Arc<AppPaths>,
+    pub db: Arc<Database>,
+}
+
+#[tauri::command]
+pub async fn trigger_capture(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let app_handle = app.clone();
+    let paths = Arc::clone(&state.paths);
+    let db = Arc::clone(&state.db);
+
+    let callback = Arc::new(move |record: CaptureRecord| {
+        use tauri::Manager;
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            let _ = window.emit("capture:new", &record);
+        }
+        let _ = app_handle.emit("capture:new", &record);
+    });
+
+    open_capture_overlay(paths, db, callback)
+}
+
+#[tauri::command]
+pub fn get_recent_captures(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<CaptureRecord>, String> {
+    state.db.get_recent_captures(limit.unwrap_or(100))
+}
+
+#[tauri::command]
+pub fn toggle_pin_capture(
+    state: State<'_, AppState>,
+    id: String,
+    is_pinned: bool,
+) -> Result<(), String> {
+    state.db.toggle_pin(&id, is_pinned)
+}
+
+#[tauri::command]
+pub fn close_capture(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.db.close_capture(&id)
+}
+
+#[tauri::command]
+pub fn delete_capture(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    if let Some((orig, thumb, proj)) = state.db.delete_capture(&id)? {
+        let _ = std::fs::remove_file(orig);
+        let _ = std::fs::remove_file(thumb);
+        if let Some(p) = proj {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_annotation_project(
+    state: State<'_, AppState>,
+    capture_id: String,
+    json_content: String,
+) -> Result<String, String> {
+    save_project_json(&state.paths, &state.db, &capture_id, &json_content)
+}
+
+#[tauri::command]
+pub fn load_annotation_project(
+    project_path: String,
+) -> Result<String, String> {
+    read_project_json(&project_path)
+}
+
+#[tauri::command]
+pub fn read_image_base64(file_path: String) -> Result<String, String> {
+    let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
+    let mime = if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "image/png"
+    };
+    
+    // Simple base64 encode using std/custom to avoid extra dependency
+    let b64 = base64_encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+pub fn copy_image_base64_to_clipboard(base64_data: String) -> Result<(), String> {
+    // Strip data:image/...;base64, if present
+    let raw_b64 = if let Some(idx) = base64_data.find(',') {
+        &base64_data[idx + 1..]
+    } else {
+        &base64_data
+    };
+
+    let bytes = base64_decode(raw_b64).map_err(|e| format!("Base64 decode error: {}", e))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.to_rgba8();
+    let (w, h) = img.dimensions();
+    copy_rgba_to_clipboard(w, h, &img.into_raw())
+}
+
+#[tauri::command]
+pub fn open_in_explorer(file_path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let path = std::path::Path::new(&file_path);
+        let arg = if path.exists() {
+            format!("/select,\"{}\"", file_path)
+        } else {
+            format!("\"{}\"", path.parent().unwrap_or(path).to_string_lossy())
+        };
+        std::process::Command::new("explorer")
+            .arg(arg)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    if let Some(json_val) = state.db.get_setting("app_settings")? {
+        serde_json::from_str(&json_val).map_err(|e| e.to_string())
+    } else {
+        Ok(AppSettings::default())
+    }
+}
+
+#[tauri::command]
+pub fn save_app_settings(
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<(), String> {
+    let json_str = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    state.db.set_setting("app_settings", &json_str)?;
+    crate::native::hotkey::update_global_hotkeys(&settings.hotkey_capture, &settings.hotkey_record);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_image_as_dialog(base64_data: String, default_name: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::PWSTR;
+        use windows::Win32::UI::Controls::Dialogs::{GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST};
+
+        let raw_b64 = if let Some(idx) = base64_data.find(',') {
+            &base64_data[idx + 1..]
+        } else {
+            &base64_data
+        };
+        let bytes = base64_decode(raw_b64).map_err(|e| format!("Decode error: {}", e))?;
+
+        let fname = default_name.unwrap_or_else(|| format!("Capture_{}.png", chrono::Local::now().format("%Y%m%d_%H%M%S")));
+        let mut file_buf = [0u16; 512];
+        let fname_wide: Vec<u16> = fname.encode_utf16().collect();
+        let copy_len = fname_wide.len().min(510);
+        file_buf[..copy_len].copy_from_slice(&fname_wide[..copy_len]);
+
+        let filter = windows::core::w!("PNG Image (*.png)\0*.png\0JPEG Image (*.jpg)\0*.jpg\0All Files (*.*)\0*.*\0\0");
+        let def_ext = windows::core::w!("png");
+
+        let mut ofn = OPENFILENAMEW {
+            lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+            hwndOwner: windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+            lpstrFilter: filter,
+            lpstrFile: PWSTR(file_buf.as_mut_ptr()),
+            nMaxFile: 512,
+            lpstrDefExt: def_ext,
+            Flags: OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+            ..Default::default()
+        };
+
+        if GetSaveFileNameW(&mut ofn).as_bool() {
+            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+            let path_str = String::from_utf16_lossy(&file_buf[..len]);
+            std::fs::write(&path_str, bytes).map_err(|e| e.to_string())?;
+            Ok(Some(path_str))
+        } else {
+            Ok(None)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+use base64::Engine;
+
+fn base64_encode(input: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(input)
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(input.trim())
+        .map_err(|e| e.to_string())
+}
