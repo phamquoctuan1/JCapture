@@ -171,7 +171,8 @@ pub fn run() {
             open_in_explorer,
             get_app_settings,
             save_app_settings,
-            export_image_as_dialog
+            export_image_as_dialog,
+            download_and_install_update
         ])
         .run(tauri::generate_context!())
         .expect("Error while running JCapture");

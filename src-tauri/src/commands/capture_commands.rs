@@ -327,6 +327,34 @@ pub fn export_image_as_dialog(base64_data: String, default_name: Option<String>)
     }
 }
 
+#[tauri::command]
+pub async fn download_and_install_update(
+    download_url: String,
+) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir();
+    let installer_path = temp_dir.join("JCapture_setup_update.exe");
+    let dest_str = installer_path.to_string_lossy().to_string();
+
+    let ps_cmd = format!(
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'JCapture-Updater'); $wc.DownloadFile('{}', '{}')",
+        download_url, dest_str
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+        .output()
+        .map_err(|e| format!("Failed to execute download: {}", e))?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Download failed: {}", err_msg));
+    }
+
+    let _ = std::process::Command::new(&installer_path).spawn();
+
+    Ok(dest_str)
+}
+
 use base64::Engine;
 
 fn base64_encode(input: &[u8]) -> String {
