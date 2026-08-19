@@ -158,6 +158,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             trigger_capture,
             trigger_fullscreen_capture,
+            create_blank_canvas,
             get_recent_captures,
             toggle_pin_capture,
             close_capture,

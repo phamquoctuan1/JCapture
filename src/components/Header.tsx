@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { Camera, Settings, Pin, Monitor, Minus, Square, X } from "lucide-react";
+import { Camera, Settings, Pin, Monitor, Minus, Square, X, PlusSquare } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface HeaderProps {
   onTriggerCapture: () => void;
   onTriggerFullscreenCapture: () => void;
+  onNewBlankCanvas: () => void;
   onOpenSettings: () => void;
   isAlwaysOnTop: boolean;
   onToggleAlwaysOnTop: () => void;
@@ -14,6 +15,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   onTriggerCapture,
   onTriggerFullscreenCapture,
+  onNewBlankCanvas,
   onOpenSettings,
   isAlwaysOnTop,
   onToggleAlwaysOnTop,
@@ -94,6 +96,18 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Monitor className="w-3.5 h-3.5 text-sky-400" />
           <span className="hidden sm:inline">Full Screen</span>
+        </button>
+
+        <button
+          onClick={onNewBlankCanvas}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 text-emerald-400 hover:text-emerald-300 text-xs font-medium transition-all border border-zinc-700"
+          title="New Blank Workspace to paste / merge screenshots (Ctrl + N)"
+        >
+          <PlusSquare className="w-3.5 h-3.5 text-emerald-400" />
+          <span>New Canvas</span>
+          <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-zinc-400 px-1 py-0.5 rounded font-mono">
+            Ctrl+N
+          </kbd>
         </button>
 
         <div className="h-4 w-px bg-zinc-800 mx-1" />

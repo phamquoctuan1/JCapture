@@ -58,11 +58,34 @@ export default function App() {
       win.setFocus();
     });
 
+    // Global shortcut Ctrl+N for new blank canvas
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        handleNewBlankCanvas();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+
     return () => {
       window.removeEventListener("focus", onWindowFocus);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
+  const handleNewBlankCanvas = async () => {
+    try {
+      const blankRecord = await invoke<CaptureRecord>("create_blank_canvas", {
+        width: 1600,
+        height: 900,
+      });
+      setCaptures((prev) => [blankRecord, ...prev]);
+      setActiveEditorRecord(blankRecord);
+    } catch (err) {
+      console.error("Failed to create blank canvas:", err);
+    }
+  };
 
   const handleTriggerCapture = async () => {
     try {
@@ -125,6 +148,7 @@ export default function App() {
       <Header
         onTriggerCapture={handleTriggerCapture}
         onTriggerFullscreenCapture={handleTriggerFullscreenCapture}
+        onNewBlankCanvas={handleNewBlankCanvas}
         onOpenSettings={() => setShowSettings(true)}
         isAlwaysOnTop={isAlwaysOnTop}
         onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
@@ -150,6 +174,7 @@ export default function App() {
           onSelectRecord={(record) => setActiveEditorRecord(record)}
           onClose={() => setActiveEditorRecord(null)}
           onUpdateRecord={handleUpdateRecord}
+          onNewBlankCanvas={handleNewBlankCanvas}
         />
       )}
 

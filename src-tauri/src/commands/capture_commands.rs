@@ -89,6 +89,37 @@ pub async fn trigger_fullscreen_capture(
 }
 
 #[tauri::command]
+pub fn create_blank_canvas(
+    state: State<'_, AppState>,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<CaptureRecord, String> {
+    let w = width.unwrap_or(1600);
+    let h = height.unwrap_or(900);
+    let total_pixels = (w * h) as usize;
+
+    // Dark canvas background #09090b
+    let mut rgba_data = Vec::with_capacity(total_pixels * 4);
+    for _ in 0..total_pixels {
+        rgba_data.push(9);
+        rgba_data.push(9);
+        rgba_data.push(11);
+        rgba_data.push(255);
+    }
+
+    let capture_id = uuid::Uuid::new_v4().to_string();
+    crate::storage::persist_capture(
+        &state.db,
+        &state.paths,
+        &capture_id,
+        "blank",
+        w,
+        h,
+        &rgba_data,
+    )
+}
+
+#[tauri::command]
 pub fn get_recent_captures(
     state: State<'_, AppState>,
     limit: Option<i64>,
