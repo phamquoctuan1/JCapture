@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "JCapture",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "com.jcapture.app",
   "build": {
     "frontendDist": "../dist",
