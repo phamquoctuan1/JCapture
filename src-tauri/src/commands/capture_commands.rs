@@ -145,6 +145,38 @@ pub fn load_annotation_project(
 }
 
 #[tauri::command]
+pub fn overwrite_capture_image(
+    state: State<'_, AppState>,
+    id: String,
+    base64_data: String,
+    width: u32,
+    height: u32,
+) -> Result<CaptureRecord, String> {
+    let raw_b64 = if let Some(idx) = base64_data.find(',') {
+        &base64_data[idx + 1..]
+    } else {
+        &base64_data
+    };
+    let bytes = base64_decode(raw_b64).map_err(|e| format!("Base64 decode error: {}", e))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+
+    if let Some((orig_path, thumb_path)) = state.db.update_capture_image(&id, width, height)? {
+        // 1. Overwrite original on disk
+        let _ = img.save(&orig_path);
+
+        // 2. Overwrite thumbnail on disk
+        let thumb = img.thumbnail(240, 160);
+        let _ = thumb.save(&thumb_path);
+    }
+
+    if let Some(record) = state.db.get_capture_by_id(&id)? {
+        Ok(record)
+    } else {
+        Err("Capture record not found".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn read_image_base64(file_path: String) -> Result<String, String> {
     let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
     let mime = if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {

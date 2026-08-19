@@ -165,6 +165,7 @@ pub fn run() {
             save_annotation_project,
             load_annotation_project,
             read_image_base64,
+            overwrite_capture_image,
             copy_image_base64_to_clipboard,
             open_in_explorer,
             get_app_settings,

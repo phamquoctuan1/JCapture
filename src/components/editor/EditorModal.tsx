@@ -1038,13 +1038,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setActiveTool("select");
   };
 
-  // Safe and clean Crop Action with Undo support
-  const handleApplyCrop = () => {
+  // Crop Action: Overwrites disk file and database record permanently
+  const handleApplyCrop = async () => {
     if (!cropRect || cropRect.w < 20 || cropRect.h < 20 || !bgImage) return;
 
     const cropCanvas = document.createElement("canvas");
-    cropCanvas.width = Math.round(cropRect.w);
-    cropCanvas.height = Math.round(cropRect.h);
+    const cropW = Math.round(cropRect.w);
+    const cropH = Math.round(cropRect.h);
+    cropCanvas.width = cropW;
+    cropCanvas.height = cropH;
     const cropCtx = cropCanvas.getContext("2d");
     if (!cropCtx) return;
 
@@ -1052,32 +1054,48 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       bgImage,
       Math.round(cropRect.x),
       Math.round(cropRect.y),
-      Math.round(cropRect.w),
-      Math.round(cropRect.h),
+      cropW,
+      cropH,
       0,
       0,
-      cropCanvas.width,
-      cropCanvas.height
+      cropW,
+      cropH
     );
 
     const croppedDataUrl = cropCanvas.toDataURL("image/png");
     const croppedImg = new Image();
     croppedImg.src = croppedDataUrl;
-    croppedImg.onload = () => {
+    croppedImg.onload = async () => {
       setBgImage(croppedImg);
       currentBgSrcRef.current = croppedDataUrl;
-      setIsCropped(true);
+      originalDataUrlRef.current = croppedDataUrl;
+      setIsCropped(false);
 
-      const newDim = { width: cropCanvas.width, height: cropCanvas.height };
+      const newDim = { width: cropW, height: cropH };
       setCanvasDim(newDim);
 
       const shiftedObjects = objects
         .map((obj) => moveObjectFromOrigin(obj, -Math.round(cropRect.x), -Math.round(cropRect.y)))
-        .filter((obj) => isObjectInsideBounds(obj, cropCanvas.width, cropCanvas.height));
+        .filter((obj) => isObjectInsideBounds(obj, cropW, cropH));
 
       pushState(shiftedObjects, croppedDataUrl, newDim);
       setIsCropMode(false);
       setCropRect(null);
+
+      // Overwrite file on disk and in database
+      try {
+        const updatedRecord = await invoke<CaptureRecord>("overwrite_capture_image", {
+          id: record.id,
+          base64Data: croppedDataUrl,
+          width: cropW,
+          height: cropH,
+        });
+        if (updatedRecord) {
+          onUpdateRecord(updatedRecord);
+        }
+      } catch (err) {
+        console.error("Failed to overwrite cropped capture on disk:", err);
+      }
     };
   };
 

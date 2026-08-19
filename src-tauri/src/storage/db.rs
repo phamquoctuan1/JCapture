@@ -165,6 +165,60 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_capture_image(&self, id: &str, width: u32, height: u32) -> Result<Option<(String, String)>, String> {
+        let conn = self.conn.lock().unwrap();
+        let paths: Result<(String, String), _> = conn.query_row(
+            "SELECT original_path, thumbnail_path FROM captures WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        if let Ok((orig, thumb)) = paths {
+            conn.execute(
+                "UPDATE captures SET width = ?1, height = ?2, updated_at = ?3 WHERE id = ?4",
+                params![width, height, chrono::Utc::now().timestamp_millis(), id],
+            ).map_err(|e| e.to_string())?;
+            Ok(Some((orig, thumb)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_capture_by_id(&self, id: &str) -> Result<Option<CaptureRecord>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, capture_type, original_path, thumbnail_path, project_path,
+                    width, height, monitor_id, is_pinned, is_closed,
+                    created_at, updated_at, last_opened_at
+             FROM captures
+             WHERE id = ?1"
+        ).map_err(|e| e.to_string())?;
+
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(CaptureRecord {
+                id: row.get(0)?,
+                capture_type: row.get(1)?,
+                original_path: row.get(2)?,
+                thumbnail_path: row.get(3)?,
+                project_path: row.get(4)?,
+                width: row.get(5)?,
+                height: row.get(6)?,
+                monitor_id: row.get(7)?,
+                is_pinned: row.get::<_, i32>(8)? != 0,
+                is_closed: row.get::<_, i32>(9)? != 0,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+                last_opened_at: row.get(12)?,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        if let Some(r) = rows.next() {
+            r.map(Some).map_err(|e| e.to_string())
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
