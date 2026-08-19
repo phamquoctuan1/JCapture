@@ -5,6 +5,8 @@ import { CaptureRecord } from "../types";
 
 interface ThumbnailCardProps {
   record: CaptureRecord;
+  isSelected?: boolean;
+  onToggleSelect?: (id: string, e: React.MouseEvent) => void;
   onOpenEditor: (record: CaptureRecord) => void;
   onTogglePin: (id: string, isPinned: boolean) => void;
   onDelete: (id: string) => void;
@@ -12,6 +14,8 @@ interface ThumbnailCardProps {
 
 export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   record,
+  isSelected = false,
+  onToggleSelect,
   onOpenEditor,
   onTogglePin,
   onDelete,
@@ -70,9 +74,17 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
 
   return (
     <div
-      onClick={() => onOpenEditor(record)}
+      onClick={(e) => {
+        if (e.ctrlKey && onToggleSelect) {
+          onToggleSelect(record.id, e);
+        } else {
+          onOpenEditor(record);
+        }
+      }}
       className={`group relative flex flex-col rounded-xl overflow-hidden border transition-all cursor-pointer bg-zinc-900/60 hover:bg-zinc-850 shadow-sm ${
-        record.isPinned
+        isSelected
+          ? "border-sky-400 ring-2 ring-sky-500/50 bg-sky-950/30 shadow-md shadow-sky-500/20"
+          : record.isPinned
           ? "border-sky-500/50 bg-sky-950/20 shadow-sky-500/10 shadow-md"
           : "border-zinc-800/80 hover:border-zinc-700"
       }`}
@@ -86,34 +98,52 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
             className="w-full h-full object-contain transition-transform duration-200 group-hover:scale-105"
           />
         ) : (
-          <div className="w-6 h-6 rounded-full border-2 border-zinc-700 border-t-sky-500 animate-spin" />
+          <div className="w-5 h-5 rounded-full border-2 border-zinc-700 border-t-sky-500 animate-spin" />
         )}
 
-        {/* Hover Overlay Action Bar */}
-        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+        {/* Top-Left Multi-Select Checkbox */}
+        {onToggleSelect && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(record.id, e);
+            }}
+            className={`absolute top-2 left-2 w-5 h-5 rounded-md flex items-center justify-center transition-all z-10 ${
+              isSelected
+                ? "bg-sky-500 text-white shadow-md shadow-sky-500/40"
+                : "bg-black/60 border border-zinc-500/80 text-transparent hover:border-sky-400 opacity-0 group-hover:opacity-100"
+            }`}
+            title={isSelected ? "Deselect" : "Select for multi-merge (Ctrl+Click)"}
+          >
+            <Check className={`w-3.5 h-3.5 ${isSelected ? "opacity-100" : "opacity-0"}`} />
+          </button>
+        )}
+
+        {/* Hover Overlay Action Bar - Compact and sleek */}
+        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
           <button
             onClick={handleCopyOriginal}
-            className="p-2 rounded-lg bg-zinc-800/90 hover:bg-sky-600 text-white transition-all transform hover:scale-110 shadow-lg"
+            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-sky-600 text-white transition-all transform hover:scale-105 shadow-md"
             title="Copy to Clipboard"
           >
-            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onOpenEditor(record);
             }}
-            className="p-2 rounded-lg bg-zinc-800/90 hover:bg-indigo-600 text-white transition-all transform hover:scale-110 shadow-lg"
+            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-indigo-600 text-white transition-all transform hover:scale-105 shadow-md"
             title="Edit Annotations"
           >
-            <Edit3 className="w-4 h-4" />
+            <Edit3 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleOpenFolder}
-            className="p-2 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-white transition-all transform hover:scale-110 shadow-lg"
+            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-white transition-all transform hover:scale-105 shadow-md"
             title="Show in Folder"
           >
-            <Folder className="w-4 h-4" />
+            <Folder className="w-3.5 h-3.5" />
           </button>
         </div>
 
@@ -123,25 +153,25 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
             e.stopPropagation();
             onTogglePin(record.id, !record.isPinned);
           }}
-          className={`absolute top-2 right-2 p-1.5 rounded-md backdrop-blur-md transition-all ${
+          className={`absolute top-2 right-2 p-1 rounded-md backdrop-blur-md transition-all ${
             record.isPinned
               ? "bg-sky-500 text-white shadow-md shadow-sky-500/30"
               : "bg-zinc-900/80 text-zinc-400 hover:text-white opacity-0 group-hover:opacity-100"
           }`}
           title={record.isPinned ? "Unpin" : "Pin to top"}
         >
-          <Pin className={`w-3.5 h-3.5 ${record.isPinned ? "fill-current" : ""}`} />
+          <Pin className={`w-3 h-3 ${record.isPinned ? "fill-current" : ""}`} />
         </button>
       </div>
 
       {/* Card Info Footer */}
-      <div className="p-2.5 flex items-center justify-between border-t border-zinc-800/60 text-xs">
+      <div className="px-2 py-1.5 flex items-center justify-between border-t border-zinc-800/60 text-xs">
         <div className="flex items-center gap-1.5 text-zinc-400">
-          <span className="font-mono text-[11px] text-zinc-300">
+          <span className="font-mono text-[10px] text-zinc-300">
             {record.width} × {record.height}
           </span>
           <span className="text-zinc-600">•</span>
-          <span className="text-[11px] text-zinc-400">{formatTime(record.createdAt)}</span>
+          <span className="text-[10px] text-zinc-400">{formatTime(record.createdAt)}</span>
         </div>
 
         <button
@@ -149,10 +179,10 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
             e.stopPropagation();
             onDelete(record.id);
           }}
-          className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
+          className="opacity-0 group-hover:opacity-100 p-0.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
           title="Delete Capture"
         >
-          <Trash2 className="w-3.5 h-3.5" />
+          <Trash2 className="w-3 h-3" />
         </button>
       </div>
     </div>

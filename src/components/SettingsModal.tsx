@@ -19,7 +19,7 @@ interface SettingsModalProps {
   onSettingsSaved?: (newSettings: AppSettings) => void;
 }
 
-const CURRENT_VERSION = "v0.2.3";
+const CURRENT_VERSION = "v0.2.4";
 const DEFAULT_REPO = "phamquoctuan1/JCapture";
 
 interface ReleaseAsset {

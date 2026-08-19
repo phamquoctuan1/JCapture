@@ -138,9 +138,39 @@ export default function App() {
     await win.setAlwaysOnTop(nextState);
   };
 
+  const [initialMergeConfig, setInitialMergeConfig] = useState<import("./components/editor/EditorModal").InitialMergeConfig | undefined>(undefined);
+
   const handleUpdateRecord = (updated: CaptureRecord) => {
     setCaptures((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setActiveEditorRecord(updated);
+  };
+
+  const handleMergeSelected = async (records: CaptureRecord[], layout: "horizontal" | "vertical" | "grid") => {
+    try {
+      const blankRecord = await invoke<CaptureRecord>("create_blank_canvas", {
+        width: 1600,
+        height: 1000,
+      });
+      setCaptures((prev) => [blankRecord, ...prev]);
+      setInitialMergeConfig({ records, layout });
+      setActiveEditorRecord(blankRecord);
+    } catch (err) {
+      console.error("Failed to create merge canvas:", err);
+    }
+  };
+
+  const handleDeleteMultiple = async (ids: string[]) => {
+    try {
+      for (const id of ids) {
+        await invoke("delete_capture", { id });
+      }
+      setCaptures((prev) => prev.filter((c) => !ids.includes(c.id)));
+      if (activeEditorRecord && ids.includes(activeEditorRecord.id)) {
+        setActiveEditorRecord(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete captures:", err);
+    }
   };
 
   return (
@@ -159,10 +189,15 @@ export default function App() {
         <RecentWorkspace
           captures={captures}
           captureShortcut={captureShortcut}
-          onOpenEditor={(record) => setActiveEditorRecord(record)}
+          onOpenEditor={(record) => {
+            setInitialMergeConfig(undefined);
+            setActiveEditorRecord(record);
+          }}
           onTogglePin={handleTogglePin}
           onDelete={handleDelete}
+          onDeleteMultiple={handleDeleteMultiple}
           onTriggerCapture={handleTriggerCapture}
+          onMergeSelected={handleMergeSelected}
         />
       </main>
 
@@ -171,8 +206,15 @@ export default function App() {
         <EditorModal
           record={activeEditorRecord}
           captures={captures}
-          onSelectRecord={(record) => setActiveEditorRecord(record)}
-          onClose={() => setActiveEditorRecord(null)}
+          initialMerge={initialMergeConfig}
+          onSelectRecord={(record) => {
+            setInitialMergeConfig(undefined);
+            setActiveEditorRecord(record);
+          }}
+          onClose={() => {
+            setActiveEditorRecord(null);
+            setInitialMergeConfig(undefined);
+          }}
           onUpdateRecord={handleUpdateRecord}
           onNewBlankCanvas={handleNewBlankCanvas}
         />

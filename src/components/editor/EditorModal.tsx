@@ -29,6 +29,9 @@ import {
   PlusCircle,
   RefreshCw,
   Maximize2,
+  Columns,
+  Rows,
+  Grid2X2,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -41,9 +44,15 @@ import {
   ToolType,
 } from "../../types";
 
+export interface InitialMergeConfig {
+  records: CaptureRecord[];
+  layout: "horizontal" | "vertical" | "grid";
+}
+
 interface EditorModalProps {
   record: CaptureRecord;
   captures?: CaptureRecord[];
+  initialMerge?: InitialMergeConfig;
   onSelectRecord?: (record: CaptureRecord) => void;
   onClose: () => void;
   onUpdateRecord: (record: CaptureRecord) => void;
@@ -76,9 +85,86 @@ const COLORS = [
 const STROKE_WIDTHS = [2, 4, 6, 8, 12];
 const overlayImageCache = new Map<string, HTMLImageElement>();
 
+// Helper to compute Smart Auto-Layout for Image Overlays
+const calculateAutoLayout = (
+  imgObjs: ImageOverlayObject[],
+  layout: "horizontal" | "vertical" | "grid"
+): { laidOutObjects: ImageOverlayObject[]; newDim: { width: number; height: number } } => {
+  if (imgObjs.length === 0) return { laidOutObjects: [], newDim: { width: 1200, height: 800 } };
+
+  const gap = 24;
+  const padding = 36;
+
+  if (layout === "horizontal") {
+    // Standardize matching height (e.g. 500px)
+    const targetH = Math.max(320, Math.min(650, Math.round(imgObjs.reduce((acc, o) => acc + o.height, 0) / imgObjs.length)));
+    let curX = padding;
+    const laidOutObjects = imgObjs.map((img) => {
+      const aspect = img.width / (img.height || 1);
+      const w = Math.round(targetH * aspect);
+      const res: ImageOverlayObject = {
+        ...img,
+        x: curX,
+        y: padding,
+        width: w,
+        height: targetH,
+      };
+      curX += w + gap;
+      return res;
+    });
+    const newDim = { width: Math.max(900, curX - gap + padding), height: Math.max(600, targetH + padding * 2) };
+    return { laidOutObjects, newDim };
+  } else if (layout === "vertical") {
+    // Standardize matching width (e.g. 800px)
+    const targetW = Math.max(500, Math.min(950, Math.round(imgObjs.reduce((acc, o) => acc + o.width, 0) / imgObjs.length)));
+    let curY = padding;
+    const laidOutObjects = imgObjs.map((img) => {
+      const aspect = img.height / (img.width || 1);
+      const h = Math.round(targetW * aspect);
+      const res: ImageOverlayObject = {
+        ...img,
+        x: padding,
+        y: curY,
+        width: targetW,
+        height: h,
+      };
+      curY += h + gap;
+      return res;
+    });
+    const newDim = { width: Math.max(800, targetW + padding * 2), height: Math.max(600, curY - gap + padding) };
+    return { laidOutObjects, newDim };
+  } else {
+    // 2x2 or 3x3 Grid
+    const maxCols = imgObjs.length <= 4 ? 2 : 3;
+    const cellW = 540;
+    const cellH = 380;
+    const laidOutObjects = imgObjs.map((img, idx) => {
+      const col = idx % maxCols;
+      const row = Math.floor(idx / maxCols);
+      const x = padding + col * (cellW + gap);
+      const y = padding + row * (cellH + gap);
+      return {
+        ...img,
+        x,
+        y,
+        width: cellW,
+        height: cellH,
+      };
+    });
+    const totalCols = Math.min(imgObjs.length, maxCols);
+    const totalRows = Math.ceil(imgObjs.length / maxCols);
+    const newDim = {
+      width: Math.max(900, padding * 2 + totalCols * cellW + (totalCols - 1) * gap),
+      height: Math.max(600, padding * 2 + totalRows * cellH + (totalRows - 1) * gap),
+    };
+    return { laidOutObjects, newDim };
+  }
+};
+
 export const EditorModal: React.FC<EditorModalProps> = ({
   record,
   captures = [],
+  initialMerge,
   onSelectRecord,
   onClose,
   onUpdateRecord,
@@ -99,6 +185,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   const [objects, setObjects] = useState<AnnotationObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Magnetic Smart Snap Alignment Guides (Figma-style)
+  const [snapGuides, setSnapGuides] = useState<{ xLines: number[]; yLines: number[] }>({
+    xLines: [],
+    yLines: [],
+  });
 
   // Cursor state based on hover over handles
   const [cursorStyle, setCursorStyle] = useState<string>("default");
@@ -189,7 +281,42 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           }
         };
 
-        if (record.projectPath) {
+        if (initialMerge && initialMerge.records.length > 0) {
+          const loadedImgs: ImageOverlayObject[] = [];
+          for (let i = 0; i < initialMerge.records.length; i++) {
+            const rec = initialMerge.records[i];
+            const imgData = await invoke<string>("read_image_base64", { filePath: rec.originalPath });
+            const overlayImg = new Image();
+            overlayImg.src = imgData;
+            overlayImageCache.set(imgData, overlayImg);
+
+            loadedImgs.push({
+              id: `img_merge_${Date.now()}_${i}`,
+              type: "image",
+              x: 0,
+              y: 0,
+              width: rec.width,
+              height: rec.height,
+              src: imgData,
+            });
+          }
+
+          const { laidOutObjects, newDim } = calculateAutoLayout(loadedImgs, initialMerge.layout);
+          if (isMounted) {
+            setObjects(laidOutObjects);
+            setCanvasDim(newDim);
+            setHistory([
+              {
+                objects: laidOutObjects,
+                bgSrc: dataUrl,
+                canvasWidth: newDim.width,
+                canvasHeight: newDim.height,
+              },
+            ]);
+            setHistoryIndex(0);
+            setStepCounter(1);
+          }
+        } else if (record.projectPath) {
           const jsonStr = await invoke<string>("load_annotation_project", {
             projectPath: record.projectPath,
           });
@@ -353,6 +480,18 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const newH = Math.max(200, maxB);
     setCanvasDim({ width: newW, height: newH });
     pushState(objects, undefined, { width: newW, height: newH });
+  };
+
+  // Smart Auto-Layout for Image Overlays (Side-by-Side, Vertical, Grid)
+  const handleAutoLayout = (layout: "horizontal" | "vertical" | "grid") => {
+    const imgObjs = objects.filter((o): o is ImageOverlayObject => o.type === "image");
+    if (imgObjs.length === 0) return;
+
+    const nonImgObjs = objects.filter((o) => o.type !== "image");
+    const { laidOutObjects, newDim } = calculateAutoLayout(imgObjs, layout);
+    const nextObjects = [...nonImgObjs, ...laidOutObjects];
+    setCanvasDim(newDim);
+    pushState(nextObjects, undefined, newDim);
   };
 
   // Revert back to original uncropped image
@@ -659,7 +798,30 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (isCropMode && cropRect && cropRect.w > 0 && cropRect.h > 0) {
       drawCropOverlay(ctx, cropRect, canvas.width, canvas.height);
     }
-  }, [bgImage, canvasDim, objects, selectedId, isCropMode, cropRect]);
+
+    // Draw Figma-Style Magnetic Alignment Guides
+    if (snapGuides.xLines.length > 0 || snapGuides.yLines.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = "#06b6d4";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+
+      for (const lx of snapGuides.xLines) {
+        ctx.beginPath();
+        ctx.moveTo(lx, 0);
+        ctx.lineTo(lx, canvas.height);
+        ctx.stroke();
+      }
+
+      for (const ly of snapGuides.yLines) {
+        ctx.beginPath();
+        ctx.moveTo(0, ly);
+        ctx.lineTo(canvas.width, ly);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }, [bgImage, canvasDim, objects, selectedId, isCropMode, cropRect, snapGuides]);
 
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -925,11 +1087,65 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
-    // Handle Object Dragging / Moving
+    // Handle Object Dragging / Moving with Figma-Style Magnetic Snap
     if (isDraggingObjectRef.current && selectedId && dragInitialObjRef.current) {
-      const dx = x - dragStartPosRef.current.x;
-      const dy = y - dragStartPosRef.current.y;
+      let dx = x - dragStartPosRef.current.x;
+      let dy = y - dragStartPosRef.current.y;
       const initial = dragInitialObjRef.current;
+      const currentBounds = getObjectBoundingBox(moveObjectFromOrigin(initial, dx, dy));
+
+      const snapThreshold = 10;
+      const activeXLines: number[] = [];
+      const activeYLines: number[] = [];
+
+      // Collect candidate snap targets (other objects + canvas edges & centers)
+      const targetX = [0, canvasDim.width / 2, canvasDim.width];
+      const targetY = [0, canvasDim.height / 2, canvasDim.height];
+
+      for (const obj of objects) {
+        if (obj.id === selectedId) continue;
+        const b = getObjectBoundingBox(obj);
+        targetX.push(b.minX, b.maxX, (b.minX + b.maxX) / 2);
+        targetY.push(b.minY, b.maxY, (b.minY + b.maxY) / 2);
+      }
+
+      // Test Snap X (left, right, center)
+      const curCenterX = (currentBounds.minX + currentBounds.maxX) / 2;
+      for (const tx of targetX) {
+        if (Math.abs(currentBounds.minX - tx) < snapThreshold) {
+          dx += tx - currentBounds.minX;
+          activeXLines.push(tx);
+          break;
+        } else if (Math.abs(currentBounds.maxX - tx) < snapThreshold) {
+          dx += tx - currentBounds.maxX;
+          activeXLines.push(tx);
+          break;
+        } else if (Math.abs(curCenterX - tx) < snapThreshold) {
+          dx += tx - curCenterX;
+          activeXLines.push(tx);
+          break;
+        }
+      }
+
+      // Test Snap Y (top, bottom, center)
+      const curCenterY = (currentBounds.minY + currentBounds.maxY) / 2;
+      for (const ty of targetY) {
+        if (Math.abs(currentBounds.minY - ty) < snapThreshold) {
+          dy += ty - currentBounds.minY;
+          activeYLines.push(ty);
+          break;
+        } else if (Math.abs(currentBounds.maxY - ty) < snapThreshold) {
+          dy += ty - currentBounds.maxY;
+          activeYLines.push(ty);
+          break;
+        } else if (Math.abs(curCenterY - ty) < snapThreshold) {
+          dy += ty - curCenterY;
+          activeYLines.push(ty);
+          break;
+        }
+      }
+
+      setSnapGuides({ xLines: activeXLines, yLines: activeYLines });
 
       setObjects((prev) =>
         prev.map((obj) => {
@@ -976,6 +1192,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setSnapGuides({ xLines: [], yLines: [] });
+
     if (isCropMode) {
       isDrawingRef.current = false;
       return;
@@ -1385,6 +1603,36 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <span>Fit</span>
             </button>
           </div>
+
+          {/* Smart Auto-Layout controls when images exist on canvas */}
+          {objects.some((o) => o.type === "image") && (
+            <div className="flex items-center gap-0.5 bg-indigo-950/40 p-0.5 rounded-lg border border-indigo-500/30 animate-in fade-in">
+              <button
+                onClick={() => handleAutoLayout("horizontal")}
+                className="p-1 px-1.5 rounded text-sky-300 hover:bg-sky-500/20 text-xs flex items-center gap-1 font-medium transition-colors"
+                title="Smart Auto-Layout: Side-by-Side horizontally (Ghép hàng ngang)"
+              >
+                <Columns className="w-3 h-3" />
+                <span className="hidden sm:inline">Row</span>
+              </button>
+              <button
+                onClick={() => handleAutoLayout("vertical")}
+                className="p-1 px-1.5 rounded text-indigo-300 hover:bg-indigo-500/20 text-xs flex items-center gap-1 font-medium transition-colors"
+                title="Smart Auto-Layout: Stack vertically (Ghép hàng dọc)"
+              >
+                <Rows className="w-3 h-3" />
+                <span className="hidden sm:inline">Stack</span>
+              </button>
+              <button
+                onClick={() => handleAutoLayout("grid")}
+                className="p-1 px-1.5 rounded text-amber-300 hover:bg-amber-500/20 text-xs flex items-center gap-1 font-medium transition-colors"
+                title="Smart Auto-Layout: Grid Matrix (Ghép lưới)"
+              >
+                <Grid2X2 className="w-3 h-3" />
+                <span className="hidden sm:inline">Grid</span>
+              </button>
+            </div>
+          )}
 
           <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
@@ -1838,26 +2086,26 @@ const BottomThumbnailCard: React.FC<{
         </div>
       )}
 
-      {/* Hover Action Overlay: + Merge Button & Delete Button */}
-      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+      {/* Hover Action Overlay: Compact + Merge Button & Delete Button */}
+      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
         <button
           onClick={(e) => {
             e.stopPropagation();
             onInsertMerge();
           }}
-          className="px-2 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg transform hover:scale-105 transition-all"
+          className="px-1.5 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[9px] font-semibold flex items-center gap-0.5 shadow-md transform hover:scale-105 transition-all"
           title="Insert and Merge this image onto active canvas"
         >
-          <PlusCircle className="w-3 h-3" />
+          <PlusCircle className="w-2.5 h-2.5" />
           <span>Merge</span>
         </button>
 
         <button
           onClick={handleDeleteItem}
-          className="p-1 rounded-md bg-zinc-800 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow"
+          className="p-1 rounded bg-zinc-800/90 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow"
           title="Delete this capture"
         >
-          <Trash2 className="w-3.5 h-3.5" />
+          <Trash2 className="w-3 h-3" />
         </button>
       </div>
 
