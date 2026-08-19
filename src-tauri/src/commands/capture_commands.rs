@@ -98,12 +98,12 @@ pub fn create_blank_canvas(
     let h = height.unwrap_or(900);
     let total_pixels = (w * h) as usize;
 
-    // Dark canvas background #09090b
+    // Clean pure white canvas background (#FFFFFF)
     let mut rgba_data = Vec::with_capacity(total_pixels * 4);
     for _ in 0..total_pixels {
-        rgba_data.push(9);
-        rgba_data.push(9);
-        rgba_data.push(11);
+        rgba_data.push(255);
+        rgba_data.push(255);
+        rgba_data.push(255);
         rgba_data.push(255);
     }
 

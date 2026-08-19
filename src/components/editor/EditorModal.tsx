@@ -110,6 +110,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   // Text Box Editor State
   const [textBoxEditor, setTextBoxEditor] = useState<{
     visible: boolean;
+    editingId: string | null;
     x: number;
     y: number;
     width: number;
@@ -120,6 +121,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     hasBg: boolean;
   }>({
     visible: false,
+    editingId: null,
     x: 0,
     y: 0,
     width: 220,
@@ -318,10 +320,37 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [objects.length, pushState]);
 
-  // Expand canvas to fit all images/annotations comfortably
+  // Expand canvas to fit multiple images/annotations comfortably
   const handleExpandCanvas = (extraW: number, extraH: number) => {
     const newW = canvasDim.width + extraW;
     const newH = canvasDim.height + extraH;
+    setCanvasDim({ width: newW, height: newH });
+    pushState(objects, undefined, { width: newW, height: newH });
+  };
+
+  // Shrink / Reduce canvas dimensions
+  const handleShrinkCanvas = (subW: number, subH: number) => {
+    const minW = bgImage ? Math.min(bgImage.naturalWidth, 400) : 400;
+    const minH = bgImage ? Math.min(bgImage.naturalHeight, 300) : 300;
+    const newW = Math.max(minW, canvasDim.width - subW);
+    const newH = Math.max(minH, canvasDim.height - subH);
+    setCanvasDim({ width: newW, height: newH });
+    pushState(objects, undefined, { width: newW, height: newH });
+  };
+
+  // Auto trim canvas to tightly fit all content
+  const handleTrimToContent = () => {
+    let maxR = bgImage ? bgImage.naturalWidth : 400;
+    let maxB = bgImage ? bgImage.naturalHeight : 300;
+
+    for (const obj of objects) {
+      const b = getObjectBoundingBox(obj);
+      if (b.maxX > maxR) maxR = Math.ceil(b.maxX) + 20;
+      if (b.maxY > maxB) maxB = Math.ceil(b.maxY) + 20;
+    }
+
+    const newW = Math.max(300, maxR);
+    const newH = Math.max(200, maxB);
     setCanvasDim({ width: newW, height: newH });
     pushState(objects, undefined, { width: newW, height: newH });
   };
@@ -982,6 +1011,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
       setTextBoxEditor({
         visible: true,
+        editingId: null,
         x: minX,
         y: minY,
         width: boxW,
@@ -1015,15 +1045,40 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   };
 
+  // Double Click to Edit Existing Text
+  const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = getCanvasCoords(e);
+    const clickedObj = [...objects].reverse().find((obj) => isPointInsideObject(x, y, obj));
+    if (clickedObj && clickedObj.type === "text") {
+      const textObj = clickedObj as TextObject;
+      setTextBoxEditor({
+        visible: true,
+        editingId: textObj.id,
+        x: textObj.x,
+        y: textObj.y,
+        width: textObj.width || 220,
+        height: textObj.height || 80,
+        text: textObj.text,
+        fontSize: textObj.fontSize || 22,
+        hasBorder: !!textObj.borderColor,
+        hasBg: !!textObj.bgColor,
+      });
+      setSelectedId(textObj.id);
+    }
+  };
+
   const handleCommitTextBox = () => {
     if (!textBoxEditor.text.trim()) {
-      setTextBoxEditor((prev) => ({ ...prev, visible: false }));
+      if (textBoxEditor.editingId) {
+        pushState(objects.filter((o) => o.id !== textBoxEditor.editingId));
+      }
+      setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
       return;
     }
 
-    const newId = `txt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const targetId = textBoxEditor.editingId || `txt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const textObj: TextObject = {
-      id: newId,
+      id: targetId,
       type: "text",
       x: textBoxEditor.x,
       y: textBoxEditor.y,
@@ -1032,14 +1087,19 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       text: textBoxEditor.text,
       fontSize: textBoxEditor.fontSize,
       color: currentColor,
-      bgColor: textBoxEditor.hasBg ? "rgba(15, 23, 42, 0.9)" : undefined,
+      bgColor: textBoxEditor.hasBg ? "rgba(255, 255, 255, 0.96)" : undefined,
       borderColor: textBoxEditor.hasBorder ? currentColor : undefined,
       borderWidth: textBoxEditor.hasBorder ? currentStrokeWidth : undefined,
     };
 
-    pushState([...objects, textObj]);
-    setSelectedId(newId);
-    setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "" }));
+    if (textBoxEditor.editingId) {
+      pushState(objects.map((o) => (o.id === textBoxEditor.editingId ? textObj : o)));
+    } else {
+      pushState([...objects, textObj]);
+    }
+
+    setSelectedId(targetId);
+    setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
     setActiveTool("select");
   };
 
@@ -1300,15 +1360,31 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             </button>
           )}
 
-          {/* Expand Canvas Button */}
-          <button
-            onClick={() => handleExpandCanvas(300, 200)}
-            className="p-1.5 px-2 rounded-lg bg-zinc-800 text-sky-400 hover:bg-sky-500/20 text-xs flex items-center gap-1 font-medium transition-colors border border-zinc-700"
-            title="Expand Canvas Workspace (Mở rộng thêm không gian ghép ảnh)"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">+ Canvas</span>
-          </button>
+          {/* Canvas Size Adjust Controls: + Canvas, - Canvas, Fit */}
+          <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
+            <button
+              onClick={() => handleExpandCanvas(300, 200)}
+              className="p-1 px-1.5 rounded text-sky-400 hover:bg-sky-500/20 text-xs flex items-center gap-1 font-medium transition-colors"
+              title="Expand Canvas Workspace (+300w, +200h)"
+            >
+              <Maximize2 className="w-3 h-3" />
+              <span>+ Canvas</span>
+            </button>
+            <button
+              onClick={() => handleShrinkCanvas(300, 200)}
+              className="p-1 px-1.5 rounded text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 text-xs flex items-center gap-1 font-medium transition-colors"
+              title="Shrink / Reduce Canvas Size (-300w, -200h)"
+            >
+              <span>- Canvas</span>
+            </button>
+            <button
+              onClick={handleTrimToContent}
+              className="p-1 px-1.5 rounded text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 text-[10px] font-medium transition-colors"
+              title="Auto Trim Canvas to fit around all images & drawings"
+            >
+              <span>Fit</span>
+            </button>
+          </div>
 
           <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
@@ -1636,6 +1712,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
+              onDoubleClick={handleDoubleClick}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1933,7 +2010,9 @@ function drawAnnotationObject(
       ctx.stroke();
     }
 
-    ctx.fillStyle = obj.color;
+    // If background is white/light and text color is too bright, render dark slate text for perfect contrast
+    const isLightBg = obj.bgColor && (obj.bgColor.includes("255, 255, 255") || obj.bgColor.toLowerCase() === "#ffffff" || obj.bgColor.toLowerCase() === "#fff");
+    ctx.fillStyle = (isLightBg && (obj.color === "#FFFFFF" || obj.color === "#FFDE2A")) ? "#0f172a" : obj.color;
     ctx.textBaseline = "top";
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], obj.x + padding, obj.y + padding + i * lineHeight);

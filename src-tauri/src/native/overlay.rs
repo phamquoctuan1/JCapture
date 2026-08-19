@@ -103,6 +103,7 @@ struct OverlayState {
     start_pt: POINT,
     current_pt: POINT,
     h_bg_bitmap: windows::Win32::Graphics::Gdi::HBITMAP,
+    h_dimmed_bitmap: windows::Win32::Graphics::Gdi::HBITMAP,
 }
 
 #[cfg(windows)]
@@ -133,10 +134,10 @@ unsafe fn run_overlay_window(
 
     let _ = RegisterClassW(&wc);
 
-    // Create GDI Bitmap from snapshot for fast BitBlt rendering
     let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(HWND(std::ptr::null_mut()));
     let hdc_mem = CreateCompatibleDC(hdc_screen);
     let h_bg_bitmap = CreateCompatibleBitmap(hdc_screen, snapshot.width as i32, snapshot.height as i32);
+    let h_dimmed_bitmap = CreateCompatibleBitmap(hdc_screen, snapshot.width as i32, snapshot.height as i32);
 
     let mut bmi = windows::Win32::Graphics::Gdi::BITMAPINFO {
         bmiHeader: windows::Win32::Graphics::Gdi::BITMAPINFOHEADER {
@@ -155,7 +156,7 @@ unsafe fn run_overlay_window(
         bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
     };
 
-    // Convert RGBA back to BGRA buffer for GDI SetDIBits
+    // 1. Prepare original BGRA buffer
     let mut bgra_buf = snapshot.rgba_data.clone();
     for chunk in bgra_buf.chunks_exact_mut(4) {
         let r = chunk[0];
@@ -170,6 +171,24 @@ unsafe fn run_overlay_window(
         0,
         snapshot.height,
         bgra_buf.as_ptr() as *const _,
+        &mut bmi,
+        windows::Win32::Graphics::Gdi::DIB_RGB_COLORS,
+    );
+
+    // 2. Pre-dim BGRA buffer for instant zero-cpu dim rendering
+    let mut dimmed_buf = bgra_buf;
+    for chunk in dimmed_buf.chunks_exact_mut(4) {
+        chunk[0] = ((chunk[0] as u16 * 55) / 100) as u8;
+        chunk[1] = ((chunk[1] as u16 * 55) / 100) as u8;
+        chunk[2] = ((chunk[2] as u16 * 55) / 100) as u8;
+    }
+
+    windows::Win32::Graphics::Gdi::SetDIBits(
+        hdc_mem,
+        h_dimmed_bitmap,
+        0,
+        snapshot.height,
+        dimmed_buf.as_ptr() as *const _,
         &mut bmi,
         windows::Win32::Graphics::Gdi::DIB_RGB_COLORS,
     );
@@ -191,6 +210,7 @@ unsafe fn run_overlay_window(
         start_pt: POINT { x: 0, y: 0 },
         current_pt: POINT { x: 0, y: 0 },
         h_bg_bitmap,
+        h_dimmed_bitmap,
     });
 
     let state_ptr = Box::into_raw(state);
@@ -287,12 +307,6 @@ unsafe extern "system" fn overlay_wndproc(
                 state.start_pt = pt;
                 state.current_pt = pt;
 
-                let log_file = state.paths.root_dir.join("debug.log");
-                let _ = std::fs::OpenOptions::new().append(true).open(&log_file).map(|mut f| {
-                    use std::io::Write;
-                    let _ = writeln!(f, "[{}] MouseDown at ({}, {})", chrono::Local::now(), pt.x, pt.y);
-                });
-
                 let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, false);
             }
             LRESULT(0)
@@ -325,24 +339,15 @@ unsafe extern "system" fn overlay_wndproc(
                     let sel_w = (sel_right - sel_left) as u32;
                     let sel_h = (sel_bottom - sel_top) as u32;
 
-                    let log_file = state.paths.root_dir.join("debug.log");
-                    let _ = std::fs::OpenOptions::new().append(true).open(&log_file).map(|mut f| {
-                        use std::io::Write;
-                        let _ = writeln!(f, "[{}] MouseUp at ({}, {}), selection: {}x{}", chrono::Local::now(), pt.x, pt.y, sel_w, sel_h);
-                    });
-
                     if sel_w >= 4 && sel_h >= 4 {
                         let _ = ShowWindow(hwnd, SW_HIDE);
 
-                        // 1. Crop snapshot
                         match state.snapshot.crop(sel_left, sel_top, sel_w, sel_h) {
                             Ok(cropped) => {
-                                // 2. High priority: Clipboard copy immediate (< 10ms)
                                 let _ = copy_rgba_to_clipboard(cropped.width, cropped.height, &cropped.rgba_data);
 
-                                // 3. Persist to disk & DB
                                 let capture_id = uuid::Uuid::new_v4().to_string();
-                                match persist_capture(
+                                if let Ok(record) = persist_capture(
                                     &state.db,
                                     &state.paths,
                                     &capture_id,
@@ -351,26 +356,11 @@ unsafe extern "system" fn overlay_wndproc(
                                     cropped.height,
                                     &cropped.rgba_data,
                                 ) {
-                                    Ok(record) => {
-                                        let _ = std::fs::OpenOptions::new().append(true).open(&log_file).map(|mut f| {
-                                            use std::io::Write;
-                                            let _ = writeln!(f, "[{}] Persisted capture: {}, invoking callback...", chrono::Local::now(), record.id);
-                                        });
-                                        (state.callback)(record);
-                                    }
-                                    Err(e) => {
-                                        let _ = std::fs::OpenOptions::new().append(true).open(&log_file).map(|mut f| {
-                                            use std::io::Write;
-                                            let _ = writeln!(f, "[{}] Persist failed: {}", chrono::Local::now(), e);
-                                        });
-                                    }
+                                    (state.callback)(record);
                                 }
                             }
                             Err(e) => {
-                                let _ = std::fs::OpenOptions::new().append(true).open(&log_file).map(|mut f| {
-                                    use std::io::Write;
-                                    let _ = writeln!(f, "[{}] Crop failed: {}", chrono::Local::now(), e);
-                                });
+                                eprintln!("Crop failed: {}", e);
                             }
                         }
                     }
@@ -393,15 +383,14 @@ unsafe extern "system" fn overlay_wndproc(
                 let mem_bmp = CreateCompatibleBitmap(hdc, w, h);
                 let old_bmp = SelectObject(mem_dc, mem_bmp);
 
-                // Source image DC
-                let src_dc = CreateCompatibleDC(hdc);
-                let old_src = SelectObject(src_dc, state.h_bg_bitmap);
+                // Dimmed background DC
+                let dim_dc = CreateCompatibleDC(hdc);
+                let old_dim = SelectObject(dim_dc, state.h_dimmed_bitmap);
 
-                // 1. Copy frozen desktop background
-                let _ = BitBlt(mem_dc, 0, 0, w, h, src_dc, 0, 0, SRCCOPY);
+                // 1. Instant copy of pre-rendered dimmed screen (0ms)
+                let _ = BitBlt(mem_dc, 0, 0, w, h, dim_dc, 0, 0, SRCCOPY);
 
-                // 2. Calculate selection in client coordinates
-                let sel_rect = if state.is_dragging {
+                if state.is_dragging {
                     let c_start_x = state.start_pt.x - state.snapshot.x;
                     let c_start_y = state.start_pt.y - state.snapshot.y;
                     let c_curr_x = state.current_pt.x - state.snapshot.x;
@@ -411,129 +400,76 @@ unsafe extern "system" fn overlay_wndproc(
                     let top = c_start_y.min(c_curr_y);
                     let right = c_start_x.max(c_curr_x);
                     let bottom = c_start_y.max(c_curr_y);
+                    let sel_w = right - left;
+                    let sel_h = bottom - top;
 
-                    Some(RECT { left, top, right, bottom })
-                } else {
-                    None
-                };
+                    if sel_w > 0 && sel_h > 0 {
+                        // 2. Instant copy of bright region from original screenshot
+                        let src_dc = CreateCompatibleDC(hdc);
+                        let old_src = SelectObject(src_dc, state.h_bg_bitmap);
+                        let _ = BitBlt(mem_dc, left, top, sel_w, sel_h, src_dc, left, top, SRCCOPY);
+                        let _ = SelectObject(src_dc, old_src);
+                        let _ = DeleteDC(src_dc);
 
-                // 3. Draw dark overlay outside selection
-                let mask_brush = CreateSolidBrush(COLORREF(0x00000000)); // Black brush
-                let blend_dc = CreateCompatibleDC(hdc);
-                let blend_bmp = CreateCompatibleBitmap(hdc, w, h);
-                let old_blend_bmp = SelectObject(blend_dc, blend_bmp);
+                        // 3. Draw clean cyan/blue border
+                        let border_pen = CreatePen(PS_SOLID, 2, rgb(56, 189, 248));
+                        let old_pen = SelectObject(mem_dc, border_pen);
+                        let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
 
-                let full_rc = RECT { left: 0, top: 0, right: w, bottom: h };
-                let _ = FillRect(blend_dc, &full_rc, mask_brush);
+                        let _ = windows::Win32::Graphics::Gdi::Rectangle(mem_dc, left, top, right, bottom);
 
-                let blend_fn = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
-                    BlendOp: windows::Win32::Graphics::Gdi::AC_SRC_OVER as u8,
-                    BlendFlags: 0,
-                    SourceConstantAlpha: 110, // ~43% dim opacity
-                    AlphaFormat: 0,
-                };
+                        // 4. Draw dimension badge
+                        if sel_w > 50 && sel_h > 20 {
+                            let size_text = format!("{} × {}", sel_w, sel_h);
+                            let mut wide_text: Vec<u16> = size_text.encode_utf16().chain(std::iter::once(0)).collect();
 
-                if let Some(sel) = sel_rect {
-                    // Dim top
-                    if sel.top > 0 {
-                        let _ = windows::Win32::Graphics::Gdi::GdiAlphaBlend(
-                            mem_dc, 0, 0, w, sel.top, blend_dc, 0, 0, w, sel.top, blend_fn,
-                        );
+                            let badge_w = 100;
+                            let badge_h = 22;
+                            let badge_x = left + 6;
+                            let badge_y = if top > 28 { top - 26 } else { top + 6 };
+
+                            let badge_rc = RECT {
+                                left: badge_x,
+                                top: badge_y,
+                                right: badge_x + badge_w,
+                                bottom: badge_y + badge_h,
+                            };
+
+                            let bg_badge_brush = CreateSolidBrush(rgb(15, 23, 42));
+                            let _ = FillRect(mem_dc, &badge_rc, bg_badge_brush);
+                            let _ = DeleteObject(bg_badge_brush);
+
+                            let font = CreateFontW(
+                                13, 0, 0, 0, FW_SEMIBOLD.0 as i32, 0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI")
+                            );
+                            let old_font = SelectObject(mem_dc, font);
+                            let _ = SetBkMode(mem_dc, BACKGROUND_MODE(1));
+                            let _ = SetTextColor(mem_dc, rgb(255, 255, 255));
+
+                            let mut text_rc = badge_rc;
+                            let text_len = wide_text.len();
+                            let _ = DrawTextW(
+                                mem_dc,
+                                &mut wide_text[..text_len - 1],
+                                &mut text_rc,
+                                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                            );
+
+                            let _ = SelectObject(mem_dc, old_font);
+                            let _ = DeleteObject(font);
+                        }
+
+                        let _ = SelectObject(mem_dc, old_brush);
+                        let _ = SelectObject(mem_dc, old_pen);
+                        let _ = DeleteObject(border_pen);
                     }
-                    // Dim bottom
-                    if sel.bottom < h {
-                        let _ = windows::Win32::Graphics::Gdi::GdiAlphaBlend(
-                            mem_dc, 0, sel.bottom, w, h - sel.bottom, blend_dc, 0, sel.bottom, w, h - sel.bottom, blend_fn,
-                        );
-                    }
-                    // Dim left
-                    if sel.left > 0 && sel.bottom > sel.top {
-                        let _ = windows::Win32::Graphics::Gdi::GdiAlphaBlend(
-                            mem_dc, 0, sel.top, sel.left, sel.bottom - sel.top, blend_dc, 0, sel.top, sel.left, sel.bottom - sel.top, blend_fn,
-                        );
-                    }
-                    // Dim right
-                    if sel.right < w && sel.bottom > sel.top {
-                        let _ = windows::Win32::Graphics::Gdi::GdiAlphaBlend(
-                            mem_dc, sel.right, sel.top, w - sel.right, sel.bottom - sel.top, blend_dc, 0, sel.top, sel.right, sel.bottom - sel.top, blend_fn,
-                        );
-                    }
-
-                    // 4. Draw selection border (Cyan/Blue)
-                    let border_color = rgb(14, 165, 233);
-                    let border_pen = CreatePen(PS_SOLID, 2, border_color);
-                    let old_pen = SelectObject(mem_dc, border_pen);
-                    let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
-
-                    let _ = windows::Win32::Graphics::Gdi::Rectangle(
-                        mem_dc, sel.left, sel.top, sel.right, sel.bottom
-                    );
-
-                    let sel_w = sel.right - sel.left;
-                    let sel_h = sel.bottom - sel.top;
-
-                    // 5. Draw size badge (e.g., "1920 × 1080")
-                    if sel_w > 60 && sel_h > 25 {
-                        let size_text = format!("{} × {}", sel_w, sel_h);
-                        let mut wide_text: Vec<u16> = size_text.encode_utf16().chain(std::iter::once(0)).collect();
-
-                        let badge_w = 110;
-                        let badge_h = 24;
-                        let badge_x = sel.left + 8;
-                        let badge_y = if sel.top > 32 { sel.top - 28 } else { sel.top + 8 };
-
-                        let badge_rc = RECT {
-                            left: badge_x,
-                            top: badge_y,
-                            right: badge_x + badge_w,
-                            bottom: badge_y + badge_h,
-                        };
-
-                        let bg_badge_brush = CreateSolidBrush(rgb(24, 24, 27));
-                        let _ = FillRect(mem_dc, &badge_rc, bg_badge_brush);
-                        let _ = DeleteObject(bg_badge_brush);
-
-                        let font = CreateFontW(
-                            14, 0, 0, 0, FW_SEMIBOLD.0 as i32, 0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI")
-                        );
-                        let old_font = SelectObject(mem_dc, font);
-                        let _ = SetBkMode(mem_dc, BACKGROUND_MODE(1)); // TRANSPARENT
-                        let _ = SetTextColor(mem_dc, rgb(244, 244, 245));
-
-                        let mut text_rc = badge_rc;
-                        let text_len = wide_text.len();
-                        let _ = DrawTextW(
-                            mem_dc,
-                            &mut wide_text[..text_len - 1],
-                            &mut text_rc,
-                            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                        );
-
-                        let _ = SelectObject(mem_dc, old_font);
-                        let _ = DeleteObject(font);
-                    }
-
-                    let _ = SelectObject(mem_dc, old_brush);
-                    let _ = SelectObject(mem_dc, old_pen);
-                    let _ = DeleteObject(border_pen);
-                } else {
-                    // Full dimming before first click
-                    let _ = windows::Win32::Graphics::Gdi::GdiAlphaBlend(
-                        mem_dc, 0, 0, w, h, blend_dc, 0, 0, w, h, blend_fn,
-                    );
                 }
 
-                // Blit memory buffer to screen
+                // 5. Final blit to screen (smooth 240Hz zero-flicker)
                 let _ = BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
 
-                // Cleanup
-                let _ = DeleteObject(mask_brush);
-                let _ = SelectObject(blend_dc, old_blend_bmp);
-                let _ = DeleteObject(blend_bmp);
-                let _ = DeleteDC(blend_dc);
-
-                let _ = SelectObject(src_dc, old_src);
-                let _ = DeleteDC(src_dc);
+                let _ = SelectObject(dim_dc, old_dim);
+                let _ = DeleteDC(dim_dc);
 
                 let _ = SelectObject(mem_dc, old_bmp);
                 let _ = DeleteObject(mem_bmp);
@@ -547,6 +483,7 @@ unsafe extern "system" fn overlay_wndproc(
             if !state_ptr.is_null() {
                 let state = Box::from_raw(state_ptr);
                 let _ = DeleteObject(state.h_bg_bitmap);
+                let _ = DeleteObject(state.h_dimmed_bitmap);
             }
             PostQuitMessage(0);
             LRESULT(0)
