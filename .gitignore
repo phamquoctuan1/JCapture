@@ -29,6 +29,10 @@ Thumbs.db
 *.userosscache
 *.sln.docstates
 
-# Executables
+# Executables & Binaries
 JCapture.exe
+JCapture-Portable.exe
 *.tmp
+
+# Prompts & internal drafts
+*Prompt*.md
