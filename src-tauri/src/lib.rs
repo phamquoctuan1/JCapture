@@ -12,11 +12,16 @@ pub mod storage;
 
 use commands::*;
 use models::CaptureRecord;
-use native::{init_dpi_awareness, open_capture_overlay, start_hotkey_listener};
+use native::{enforce_single_instance, init_dpi_awareness, open_capture_overlay, start_hotkey_listener};
 use storage::{AppPaths, Database};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if !enforce_single_instance() {
+        // Another instance is already running and has been brought to foreground
+        std::process::exit(0);
+    }
+
     init_dpi_awareness();
 
     let paths = Arc::new(AppPaths::init().expect("Failed to initialize AppPaths"));

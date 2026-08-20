@@ -19,7 +19,7 @@ interface SettingsModalProps {
   onSettingsSaved?: (newSettings: AppSettings) => void;
 }
 
-const CURRENT_VERSION = "v0.2.6";
+const CURRENT_VERSION = "v0.2.7";
 const DEFAULT_REPO = "phamquoctuan1/JCapture";
 
 interface ReleaseAsset {
@@ -174,18 +174,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleDownloadAndInstall = async () => {
     if (!latestRelease) return;
     setIsDownloading(true);
-    setDownloadMessage("Downloading installer from GitHub...");
+    setDownloadMessage("Downloading latest update from GitHub...");
 
-    const exeAsset = latestRelease.assets?.find(
-      (a) => a.name.endsWith(".exe") || a.name.endsWith(".msi")
-    );
+    const portableAsset = latestRelease.assets?.find((a) => a.name.includes("Portable.exe"));
+    const setupAsset = latestRelease.assets?.find((a) => a.name.includes("setup.exe") || a.name.endsWith(".exe") || a.name.endsWith(".msi"));
+    const exeAsset = portableAsset || setupAsset;
 
     try {
       if (exeAsset) {
+        setDownloadMessage("Updating JCapture and restarting into new version...");
         await invoke("download_and_install_update", {
           downloadUrl: exeAsset.browser_download_url,
         });
-        setDownloadMessage("Installer launched! Follow setup instructions.");
       } else {
         window.open(latestRelease.html_url, "_blank");
       }

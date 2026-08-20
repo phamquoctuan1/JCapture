@@ -332,8 +332,13 @@ pub async fn download_and_install_update(
     download_url: String,
 ) -> Result<String, String> {
     let temp_dir = std::env::temp_dir();
-    let installer_path = temp_dir.join("JCapture_setup_update.exe");
-    let dest_str = installer_path.to_string_lossy().to_string();
+    let is_portable = download_url.contains("Portable") || !download_url.contains("setup");
+    let downloaded_file = if is_portable {
+        temp_dir.join("JCapture_new.exe")
+    } else {
+        temp_dir.join("JCapture_setup_update.exe")
+    };
+    let dest_str = downloaded_file.to_string_lossy().to_string();
 
     // 1. Try native curl.exe with -L for seamless GitHub / S3 redirects
     let curl_res = std::process::Command::new("curl.exe")
@@ -350,8 +355,8 @@ pub async fn download_and_install_update(
 
     let mut download_succeeded = false;
     if let Ok(out) = curl_res {
-        if out.status.success() && installer_path.exists() {
-            if let Ok(meta) = std::fs::metadata(&installer_path) {
+        if out.status.success() && downloaded_file.exists() {
+            if let Ok(meta) = std::fs::metadata(&downloaded_file) {
                 if meta.len() > 1024 * 500 {
                     download_succeeded = true;
                 }
@@ -370,8 +375,8 @@ pub async fn download_and_install_update(
             .output();
 
         if let Ok(out) = ps_res {
-            if out.status.success() && installer_path.exists() {
-                if let Ok(meta) = std::fs::metadata(&installer_path) {
+            if out.status.success() && downloaded_file.exists() {
+                if let Ok(meta) = std::fs::metadata(&downloaded_file) {
                     if meta.len() > 1024 * 500 {
                         download_succeeded = true;
                     }
@@ -381,10 +386,43 @@ pub async fn download_and_install_update(
     }
 
     if !download_succeeded {
-        return Err("Could not download installer directly. Please click 'Download via Browser'.".to_string());
+        return Err("Could not download update directly. Please click 'Open GitHub Download Page in Browser'.".to_string());
     }
 
-    let _ = std::process::Command::new(&installer_path).spawn();
+    // Perform seamless in-place upgrade and close old instance
+    if is_portable {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe path: {}", e))?
+            .to_string_lossy()
+            .to_string();
+        let current_pid = std::process::id();
+        let bat_path = temp_dir.join("jcapture_updater.bat");
+
+        let bat_content = format!(
+            "@echo off\r\ntimeout /t 1 /nobreak >nul\r\n:wait_loop\r\ntasklist /fi \"PID eq {}\" | find \"{}\" >nul\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >nul\r\n  goto wait_loop\r\n)\r\ncopy /y \"{}\" \"{}\" >nul\r\nstart \"\" \"{}\"\r\ndel \"{}\" >nul 2>&1\r\ndel \"%~f0\" >nul 2>&1\r\n",
+            current_pid, current_pid, dest_str, current_exe, current_exe, dest_str
+        );
+
+        std::fs::write(&bat_path, bat_content)
+            .map_err(|e| format!("Failed to create updater script: {}", e))?;
+
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "/b", "", &bat_path.to_string_lossy()])
+            .spawn();
+
+        // Gracefully exit current process after short delay so batch script can replace binary
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::process::exit(0);
+        });
+    } else {
+        // Setup installer execution
+        let _ = std::process::Command::new(&downloaded_file).spawn();
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::process::exit(0);
+        });
+    }
 
     Ok(dest_str)
 }
