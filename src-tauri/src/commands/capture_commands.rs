@@ -416,10 +416,13 @@ pub async fn download_and_install_update(
             .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_installer])
             .spawn();
 
+        crate::native::release_single_instance();
+
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(500));
             std::process::exit(0);
         });
+    } else {
         // Portable binary in-place update with Atomic Rename Replacement pattern
         let ps_updater = format!(
             "$pidToWait = {}; $src = '{}'; $dst = '{}'; $dstOld = \"$dst.old\"; \
@@ -458,6 +461,8 @@ pub async fn download_and_install_update(
         let _ = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_updater])
             .spawn();
+
+        crate::native::release_single_instance();
 
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(500));
