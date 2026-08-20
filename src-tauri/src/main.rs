@@ -2,5 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(windows)]
+    {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--enable-usermedia-screen-capturing --allow-http-screen-capture --enable-features=WebRTCPipeWireCapturer,ScreenCaptureKit",
+        );
+    }
     jcapture_lib::run();
 }

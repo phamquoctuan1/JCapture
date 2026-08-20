@@ -86,11 +86,6 @@ export default function App() {
       win.setFocus();
     });
 
-    // Listen for screen recording start from global hotkey
-    const unlistenRecordPromise = listen("record:start", () => {
-      handleStartRecording();
-    });
-
     // Global shortcut Ctrl+N for new blank canvas
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")) {
@@ -104,7 +99,6 @@ export default function App() {
       window.removeEventListener("focus", onWindowFocus);
       window.removeEventListener("keydown", handleGlobalKeyDown);
       unlistenCapturePromise.then((unlisten) => unlisten());
-      unlistenRecordPromise.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -145,14 +139,39 @@ export default function App() {
     }
   };
 
+  const isRecordingRef = useRef(false);
+  isRecordingRef.current = isRecording;
+
+  // Listen for screen recording start from global hotkey
+  useEffect(() => {
+    const unlistenRecordPromise = listen("record:start", () => {
+      if (isRecordingRef.current) {
+        handleStopRecording();
+      } else {
+        handleStartRecording();
+      }
+    });
+    return () => {
+      unlistenRecordPromise.then((u) => u());
+    };
+  }, []);
+
   // --- Screen Recording Workflow ---
   const handleStartRecording = async () => {
     try {
-      // 1. Request Display Stream
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 60 } },
-        audio: true,
-      });
+      // 1. Request Display Stream with fallback
+      let displayStream: MediaStream;
+      try {
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 30, max: 60 } },
+          audio: true,
+        });
+      } catch (errWithAudio) {
+        console.warn("getDisplayMedia with audio failed, falling back to video only:", errWithAudio);
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 30, max: 60 } },
+        });
+      }
 
       let combinedStream = displayStream;
 
