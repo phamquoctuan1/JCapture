@@ -203,6 +203,13 @@ export default function App() {
         videoBitsPerSecond: 6000000, // 6 Mbps high quality
       });
 
+      // Create a hidden video element to capture a live thumbnail frame
+      const liveVideo = document.createElement("video");
+      liveVideo.srcObject = combinedStream;
+      liveVideo.muted = true;
+      liveVideo.playsInline = true;
+      liveVideo.play().catch(() => {});
+
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           recordedChunksRef.current.push(e.data);
@@ -215,55 +222,23 @@ export default function App() {
           type: selectedMime || "video/webm",
         });
 
-        // Generate thumbnail frame from video blob
+        // 1. Grab thumbnail immediately from liveVideo before stopping tracks
+        let thumbBase64 = "";
+        let width = 1920;
+        let height = 1080;
         try {
-          const videoEl = document.createElement("video");
-          videoEl.src = URL.createObjectURL(videoBlob);
-          videoEl.muted = true;
-          videoEl.playsInline = true;
-
-          videoEl.onloadeddata = async () => {
-            videoEl.currentTime = 0.1;
-          };
-
-          videoEl.onseeked = async () => {
-            const canvas = document.createElement("canvas");
-            canvas.width = videoEl.videoWidth || 1280;
-            canvas.height = videoEl.videoHeight || 720;
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-              ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-            }
-            const thumbBase64 = canvas.toDataURL("image/png");
-
-            // Convert video blob to base64
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-              const videoBase64 = reader.result as string;
-              try {
-                const savedRecord = await invoke<CaptureRecord>("save_video_recording", {
-                  base64Video: videoBase64,
-                  base64Thumbnail: thumbBase64,
-                  width: canvas.width,
-                  height: canvas.height,
-                  durationMs,
-                });
-
-                setCaptures((prev) => [savedRecord, ...prev]);
-                setActiveVideoRecord(savedRecord);
-
-                const win = getCurrentWindow();
-                win.show();
-                win.unminimize();
-                win.setFocus();
-              } catch (saveErr) {
-                console.error("Failed to save recording record:", saveErr);
-              }
-            };
-            reader.readAsDataURL(videoBlob);
-          };
-        } catch (thumbErr) {
-          console.error("Failed to generate video thumbnail:", thumbErr);
+          const canvas = document.createElement("canvas");
+          width = liveVideo.videoWidth || 1920;
+          height = liveVideo.videoHeight || 1080;
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(liveVideo, 0, 0, width, height);
+            thumbBase64 = canvas.toDataURL("image/png");
+          }
+        } catch (e) {
+          console.warn("Could not capture thumbnail frame:", e);
         }
 
         // Clean up streams
@@ -271,6 +246,34 @@ export default function App() {
         streamRef.current = null;
         setIsRecording(false);
         setIsPaused(false);
+
+        // 2. Read video blob directly to base64 and save to Rust backend!
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const videoBase64 = reader.result as string;
+          try {
+            const savedRecord = await invoke<CaptureRecord>("save_video_recording", {
+              base64Video: videoBase64,
+              base64Thumbnail:
+                thumbBase64 ||
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              width,
+              height,
+              durationMs,
+            });
+
+            setCaptures((prev) => [savedRecord, ...prev]);
+            setActiveVideoRecord(savedRecord);
+
+            const win = getCurrentWindow();
+            await win.show();
+            await win.unminimize();
+            await win.setFocus();
+          } catch (saveErr) {
+            console.error("Failed to save recording record:", saveErr);
+          }
+        };
+        reader.readAsDataURL(videoBlob);
       };
 
       // Handle user stopping screen share via browser bar

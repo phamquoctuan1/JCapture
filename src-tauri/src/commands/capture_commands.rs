@@ -210,8 +210,13 @@ pub fn overwrite_capture_image(
 #[tauri::command]
 pub fn read_image_base64(file_path: String) -> Result<String, String> {
     let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
-    let mime = if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {
+    let lower = file_path.to_lowercase();
+    let mime = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
         "image/jpeg"
+    } else if lower.ends_with(".webm") {
+        "video/webm"
+    } else if lower.ends_with(".mp4") {
+        "video/mp4"
     } else {
         "image/png"
     };
