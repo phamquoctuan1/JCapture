@@ -394,22 +394,54 @@ pub async fn download_and_install_update(
         return Err("Could not download update directly. Please click 'Open GitHub Download Page in Browser'.".to_string());
     }
 
-    // Perform seamless in-place upgrade and close old instance
-    if is_portable {
-        let current_exe = std::env::current_exe()
-            .map_err(|e| format!("Failed to get current exe path: {}", e))?
-            .to_string_lossy()
-            .to_string();
-        let current_pid = std::process::id();
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current exe path: {}", e))?
+        .to_string_lossy()
+        .to_string();
+    let current_pid = std::process::id();
+    let is_in_program_files = current_exe.to_lowercase().contains("program files");
 
-        // Use a background powershell process to wait for exit, overwrite executable, and relaunch visibly
-        let ps_updater = format!(
-            "$pidToWait = {}; $src = '{}'; $dst = '{}'; \
+    if is_in_program_files || (!is_portable && downloaded_file.to_string_lossy().ends_with(".exe")) {
+        // Run installer with UAC elevation to update Program Files directory cleanly
+        let ps_installer = format!(
+            "$pidToWait = {}; $installer = '{}'; \
              Start-Sleep -Milliseconds 400; \
              while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
-             Copy-Item -LiteralPath $src -Destination $dst -Force; \
-             Start-Process -FilePath $dst -WindowStyle Normal; \
-             Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue;",
+             Start-Process -FilePath $installer -Verb RunAs;",
+            current_pid,
+            dest_str.replace('\'', "''")
+        );
+
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_installer])
+            .spawn();
+
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::process::exit(0);
+        });
+    } else {
+        // Portable binary in-place update with retry loop until Windows file-lock is fully released
+        let ps_updater = format!(
+            "$pidToWait = {}; $src = '{}'; $dst = '{}'; \
+             Start-Sleep -Milliseconds 500; \
+             while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
+             $copied = $false; \
+             for ($i = 0; $i -lt 30; $i++) {{ \
+                 try {{ \
+                     Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; \
+                     $copied = $true; \
+                     break; \
+                 }} catch {{ \
+                     Start-Sleep -Milliseconds 300; \
+                 }} \
+             }}; \
+             if ($copied) {{ \
+                 Start-Process -FilePath $dst -WindowStyle Normal; \
+                 Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue; \
+             }} else {{ \
+                 Start-Process -FilePath $src -WindowStyle Normal; \
+             }}",
             current_pid,
             dest_str.replace('\'', "''"),
             current_exe.replace('\'', "''")
@@ -419,14 +451,6 @@ pub async fn download_and_install_update(
             .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_updater])
             .spawn();
 
-        // Gracefully exit current process so destination binary can be overwritten
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            std::process::exit(0);
-        });
-    } else {
-        // Setup installer execution
-        let _ = std::process::Command::new(&downloaded_file).spawn();
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(500));
             std::process::exit(0);
