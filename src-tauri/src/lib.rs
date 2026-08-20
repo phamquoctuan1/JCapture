@@ -177,6 +177,7 @@ pub fn run() {
             get_app_settings,
             save_app_settings,
             export_image_as_dialog,
+            get_app_version,
             download_and_install_update
         ])
         .run(tauri::generate_context!())

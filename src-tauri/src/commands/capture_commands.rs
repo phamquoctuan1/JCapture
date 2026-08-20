@@ -328,6 +328,11 @@ pub fn export_image_as_dialog(base64_data: String, default_name: Option<String>)
 }
 
 #[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
 pub async fn download_and_install_update(
     download_url: String,
 ) -> Result<String, String> {
@@ -397,13 +402,13 @@ pub async fn download_and_install_update(
             .to_string();
         let current_pid = std::process::id();
 
-        // Use a hidden background powershell process to wait for exit, overwrite executable, and relaunch
+        // Use a background powershell process to wait for exit, overwrite executable, and relaunch visibly
         let ps_updater = format!(
             "$pidToWait = {}; $src = '{}'; $dst = '{}'; \
              Start-Sleep -Milliseconds 400; \
              while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
              Copy-Item -LiteralPath $src -Destination $dst -Force; \
-             Start-Process -FilePath $dst; \
+             Start-Process -FilePath $dst -WindowStyle Normal; \
              Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue;",
             current_pid,
             dest_str.replace('\'', "''"),

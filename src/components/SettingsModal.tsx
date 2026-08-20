@@ -19,7 +19,6 @@ interface SettingsModalProps {
   onSettingsSaved?: (newSettings: AppSettings) => void;
 }
 
-const CURRENT_VERSION = "v0.2.8";
 const DEFAULT_REPO = "phamquoctuan1/JCapture";
 
 interface ReleaseAsset {
@@ -64,6 +63,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [saved, setSaved] = useState(false);
 
   // Update checking state
+  const [runningVersion, setRunningVersion] = useState<string>("0.2.8");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadMessage, setDownloadMessage] = useState("");
@@ -81,6 +81,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       } catch (err) {
         console.error("Failed to load settings:", err);
       }
+      try {
+        const ver = await invoke<string>("get_app_version");
+        if (ver) setRunningVersion(ver);
+      } catch (err) {
+        console.error("Failed to get running version:", err);
+      }
     };
     loadSettings();
     handleCheckUpdate();
@@ -89,34 +95,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isRecordingCapture) return;
     e.preventDefault();
-
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
     if (e.altKey) parts.push("Alt");
     if (e.shiftKey) parts.push("Shift");
-    if (e.metaKey) parts.push("Win");
 
-    let key = e.key.toUpperCase();
-    if (["CONTROL", "ALT", "SHIFT", "META"].includes(key)) {
-      return;
+    const key = e.key.toUpperCase();
+    if (!["CONTROL", "ALT", "SHIFT", "META"].includes(key)) {
+      parts.push(key);
+      const combo = parts.join("+");
+      setSettings((prev) => ({ ...prev, hotkeyCapture: combo }));
+      setIsRecordingCapture(false);
     }
-
-    if (key === "PRINTSCREEN") key = "PrintScreen";
-    if (key === " ") key = "Space";
-
-    parts.push(key);
-    const newShortcut = parts.join("+");
-
-    setSettings({ ...settings, hotkeyCapture: newShortcut });
-    setIsRecordingCapture(false);
   };
 
   const handleSave = async () => {
     try {
-      await invoke("save_app_settings", { settings });
-      if (onSettingsSaved) {
-        onSettingsSaved(settings);
-      }
+      await invoke("save_app_settings", { newSettings: settings });
+      if (onSettingsSaved) onSettingsSaved(settings);
       setSaved(true);
       setTimeout(() => {
         setSaved(false);
@@ -134,6 +130,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setDownloadMessage("");
 
     try {
+      let activeVer = runningVersion;
+      try {
+        const ver = await invoke<string>("get_app_version");
+        if (ver) {
+          activeVer = ver;
+          setRunningVersion(ver);
+        }
+      } catch (_) {}
+
       const response = await fetch(
         `https://api.github.com/repos/${DEFAULT_REPO}/releases/latest`,
         {
@@ -155,7 +160,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLatestRelease(release);
 
       const latestVer = release.tag_name.replace(/^v/, "").trim();
-      const currentVer = CURRENT_VERSION.replace(/^v/, "").trim();
+      const currentVer = activeVer.replace(/^v/, "").trim();
 
       if (latestVer !== currentVer) {
         setUpdateStatus("available");
@@ -336,7 +341,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>Software Update</span>
               </div>
               <span className="text-[11px] text-zinc-400 font-mono">
-                Current: {CURRENT_VERSION}
+                Current: v{runningVersion}
               </span>
             </div>
 
@@ -356,7 +361,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {updateStatus === "latest" && (
                 <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] bg-emerald-950/40 p-2 rounded border border-emerald-800/40">
                   <Check className="w-3.5 h-3.5" />
-                  <span>You have the latest version installed ({CURRENT_VERSION})!</span>
+                  <span>You have the latest version installed (v{runningVersion})!</span>
                 </div>
               )}
 
