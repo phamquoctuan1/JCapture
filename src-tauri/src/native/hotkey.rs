@@ -16,10 +16,11 @@ use parking_lot::Mutex;
 
 pub const HOTKEY_ID_CAPTURE: i32 = 1001;
 pub const HOTKEY_ID_RECORD: i32 = 1002;
+pub const HOTKEY_ID_FULLSCREEN: i32 = 1003;
 const WM_RELOAD_HOTKEYS: u32 = WM_USER + 101;
 
 lazy_static! {
-    static ref HOTKEY_SENDER: Mutex<Option<(Sender<(String, String)>, u32)>> = Mutex::new(None);
+    static ref HOTKEY_SENDER: Mutex<Option<(Sender<(String, String, String)>, u32)>> = Mutex::new(None);
 }
 
 pub fn parse_hotkey(s: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
@@ -62,10 +63,14 @@ pub fn parse_hotkey(s: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
     vk.map(|k| (HOT_KEY_MODIFIERS(mods), k))
 }
 
-pub fn update_global_hotkeys(capture_shortcut: &str, record_shortcut: &str) {
+pub fn update_global_hotkeys(capture_shortcut: &str, fullscreen_shortcut: &str, record_shortcut: &str) {
     let lock = HOTKEY_SENDER.lock();
     if let Some((ref sender, thread_id)) = *lock {
-        let _ = sender.send((capture_shortcut.to_string(), record_shortcut.to_string()));
+        let _ = sender.send((
+            capture_shortcut.to_string(),
+            fullscreen_shortcut.to_string(),
+            record_shortcut.to_string(),
+        ));
         #[cfg(windows)]
         unsafe {
             let _ = PostThreadMessageW(thread_id, WM_RELOAD_HOTKEYS, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
@@ -75,11 +80,13 @@ pub fn update_global_hotkeys(capture_shortcut: &str, record_shortcut: &str) {
 
 pub fn start_hotkey_listener(
     initial_capture: String,
+    initial_fullscreen: String,
     initial_record: String,
     on_capture_press: Arc<dyn Fn() + Send + Sync + 'static>,
+    on_fullscreen_press: Arc<dyn Fn() + Send + Sync + 'static>,
     on_record_press: Arc<dyn Fn() + Send + Sync + 'static>,
 ) {
-    let (tx, rx) = channel::<(String, String)>();
+    let (tx, rx) = channel::<(String, String, String)>();
 
     std::thread::spawn(move || {
         #[cfg(windows)]
@@ -91,21 +98,21 @@ pub fn start_hotkey_listener(
             }
 
             let mut current_cap = initial_capture;
+            let mut current_full = initial_fullscreen;
             let mut current_rec = initial_record;
 
-            let register_keys = |cap: &str, rec: &str| {
+            let register_keys = |cap: &str, full: &str, rec: &str| {
                 let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE);
+                let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_FULLSCREEN);
                 let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_RECORD);
 
-                // Try registering user capture hotkey
+                // 1. Try registering user capture hotkey
                 if let Some((mods, vk)) = parse_hotkey(cap) {
                     if let Err(e) = RegisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE, mods, vk) {
-                        eprintln!("Warning: Failed to register hotkey '{}': {}", cap, e);
-                        // Try fallback to Alt+A if Ctrl+Shift+A was occupied
+                        eprintln!("Warning: Failed to register capture hotkey '{}': {}", cap, e);
                         if cap.eq_ignore_ascii_case("Ctrl+Shift+A") {
                             if let Some((alt_mods, alt_vk)) = parse_hotkey("Alt+A") {
                                 let _ = RegisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE, alt_mods, alt_vk);
-                                println!("Registered fallback hotkey: Alt+A");
                             }
                         }
                     } else {
@@ -113,7 +120,16 @@ pub fn start_hotkey_listener(
                     }
                 }
 
-                // Try registering user record hotkey
+                // 2. Try registering user fullscreen capture hotkey
+                if let Some((mods, vk)) = parse_hotkey(full) {
+                    if let Err(e) = RegisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_FULLSCREEN, mods, vk) {
+                        eprintln!("Warning: Failed to register fullscreen hotkey '{}': {}", full, e);
+                    } else {
+                        println!("Successfully registered fullscreen hotkey: {}", full);
+                    }
+                }
+
+                // 3. Try registering user record hotkey
                 if let Some((mods, vk)) = parse_hotkey(rec) {
                     if let Err(e) = RegisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_RECORD, mods, vk) {
                         eprintln!("Warning: Failed to register record hotkey '{}': {}", rec, e);
@@ -123,7 +139,7 @@ pub fn start_hotkey_listener(
                 }
             };
 
-            register_keys(&current_cap, &current_rec);
+            register_keys(&current_cap, &current_full, &current_rec);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).as_bool() {
@@ -131,15 +147,18 @@ pub fn start_hotkey_listener(
                     let id = msg.wParam.0 as i32;
                     if id == HOTKEY_ID_CAPTURE {
                         on_capture_press();
+                    } else if id == HOTKEY_ID_FULLSCREEN {
+                        on_fullscreen_press();
                     } else if id == HOTKEY_ID_RECORD {
                         on_record_press();
                     }
                 } else if msg.message == WM_RELOAD_HOTKEYS {
-                    while let Ok((new_cap, new_rec)) = rx.try_recv() {
+                    while let Ok((new_cap, new_full, new_rec)) = rx.try_recv() {
                         current_cap = new_cap;
+                        current_full = new_full;
                         current_rec = new_rec;
                     }
-                    register_keys(&current_cap, &current_rec);
+                    register_keys(&current_cap, &current_full, &current_rec);
                 }
 
                 let _ = TranslateMessage(&msg);
@@ -147,6 +166,7 @@ pub fn start_hotkey_listener(
             }
 
             let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE);
+            let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_FULLSCREEN);
             let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_RECORD);
         }
     });

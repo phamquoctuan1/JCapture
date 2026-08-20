@@ -47,12 +47,22 @@ const PRESET_SHORTCUTS = [
   "Alt+S",
 ];
 
+const PRESET_FULLSCREEN_SHORTCUTS = [
+  "Ctrl+Shift+F",
+  "Alt+PrintScreen",
+  "Ctrl+Alt+A",
+  "PrintScreen",
+  "F2",
+  "Alt+F",
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSettingsSaved,
 }) => {
   const [settings, setSettings] = useState<AppSettings>({
     hotkeyCapture: "Alt+A",
+    hotkeyFullscreen: "Ctrl+Shift+F",
     hotkeyRecord: "Ctrl+Shift+R",
     autoStartWithWindows: false,
     copyToClipboardOnCapture: true,
@@ -60,6 +70,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     saveDirectory: "",
   });
   const [isRecordingCapture, setIsRecordingCapture] = useState(false);
+  const [isRecordingFullscreen, setIsRecordingFullscreen] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Update checking state
@@ -77,7 +88,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const loadSettings = async () => {
       try {
         const s = await invoke<AppSettings>("get_app_settings");
-        setSettings(s);
+        setSettings({
+          ...s,
+          hotkeyFullscreen: s.hotkeyFullscreen || "Ctrl+Shift+F",
+        });
       } catch (err) {
         console.error("Failed to load settings:", err);
       }
@@ -93,7 +107,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isRecordingCapture) return;
+    if (!isRecordingCapture && !isRecordingFullscreen) return;
     e.preventDefault();
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
@@ -104,8 +118,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (!["CONTROL", "ALT", "SHIFT", "META"].includes(key)) {
       parts.push(key);
       const combo = parts.join("+");
-      setSettings((prev) => ({ ...prev, hotkeyCapture: combo }));
-      setIsRecordingCapture(false);
+      if (isRecordingCapture) {
+        setSettings((prev) => ({ ...prev, hotkeyCapture: combo }));
+        setIsRecordingCapture(false);
+      } else if (isRecordingFullscreen) {
+        setSettings((prev) => ({ ...prev, hotkeyFullscreen: combo }));
+        setIsRecordingFullscreen(false);
+      }
     }
   };
 
@@ -277,6 +296,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     }}
                     className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
                       settings.hotkeyCapture === preset
+                        ? "bg-sky-600 text-white font-semibold"
+                        : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Fullscreen Capture Hotkey */}
+            <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-300">Fullscreen Shortcut:</span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={settings.hotkeyFullscreen || "Ctrl+Shift+F"}
+                    onChange={(e) => setSettings({ ...settings, hotkeyFullscreen: e.target.value })}
+                    className="w-32 bg-zinc-900 border border-zinc-700 px-2 py-1 rounded text-sky-400 font-mono text-xs text-center focus:outline-none focus:border-sky-500"
+                    placeholder="e.g. Ctrl+Shift+F"
+                  />
+                  <button
+                    onClick={() => setIsRecordingFullscreen(!isRecordingFullscreen)}
+                    className={`px-2.5 py-1 rounded font-mono font-semibold text-xs transition-all ${
+                      isRecordingFullscreen
+                        ? "bg-amber-500 text-black ring-2 ring-amber-400 animate-pulse"
+                        : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                    }`}
+                    title="Click then press any key combination on keyboard"
+                  >
+                    {isRecordingFullscreen ? "Press key..." : "Record"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Presets */}
+              <div className="pt-1 flex flex-wrap gap-1 items-center">
+                <span className="text-[10px] text-zinc-400 mr-1">Presets:</span>
+                {PRESET_FULLSCREEN_SHORTCUTS.map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      setSettings({ ...settings, hotkeyFullscreen: preset });
+                      setIsRecordingFullscreen(false);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                      (settings.hotkeyFullscreen || "Ctrl+Shift+F") === preset
                         ? "bg-sky-600 text-white font-semibold"
                         : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
                     }`}

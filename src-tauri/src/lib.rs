@@ -122,8 +122,13 @@ pub fn run() {
                 .unwrap_or_default();
 
             let h_capture = handle_for_hotkey.clone();
+            let h_fullscreen = handle_for_hotkey.clone();
+            let paths_for_fullscreen = Arc::clone(&app_paths_clone);
+            let db_for_fullscreen = Arc::clone(&db_clone);
+
             start_hotkey_listener(
                 initial_settings.hotkey_capture,
+                initial_settings.hotkey_fullscreen,
                 initial_settings.hotkey_record,
                 Arc::new(move || {
                     let h = h_capture.clone();
@@ -141,6 +146,52 @@ pub fn run() {
                         Arc::clone(&db_for_hotkey),
                         cb,
                     );
+                }),
+                Arc::new(move || {
+                    let h = h_fullscreen.clone();
+                    let paths = Arc::clone(&paths_for_fullscreen);
+                    let db = Arc::clone(&db_for_fullscreen);
+
+                    if let Some(window) = h.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+
+                        match crate::native::ScreenSnapshot::capture_virtual_screen() {
+                            Ok(snap) => {
+                                let _ = crate::native::copy_rgba_to_clipboard(snap.width, snap.height, &snap.rgba_data);
+
+                                let capture_id = uuid::Uuid::new_v4().to_string();
+                                if let Ok(record) = crate::storage::persist_capture(
+                                    &db,
+                                    &paths,
+                                    &capture_id,
+                                    "fullscreen",
+                                    snap.width,
+                                    snap.height,
+                                    &snap.rgba_data,
+                                ) {
+                                    if let Some(window) = h.get_webview_window("main") {
+                                        let _ = window.show();
+                                        let _ = window.unminimize();
+                                        let _ = window.set_focus();
+                                        let _ = window.emit("capture:new", &record);
+                                    }
+                                    let _ = h.emit("capture:new", &record);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Fullscreen hotkey capture failed: {}", e);
+                                if let Some(window) = h.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    });
                 }),
                 Arc::new(move || {
                     println!("Screen recording shortcut triggered");

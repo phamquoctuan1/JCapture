@@ -14,6 +14,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [captureShortcut, setCaptureShortcut] = useState<string>("Alt+A");
+  const [fullscreenShortcut, setFullscreenShortcut] = useState<string>("Ctrl+Shift+F");
 
   // Load Recent Captures & Settings on Mount
   useEffect(() => {
@@ -28,9 +29,12 @@ export default function App() {
 
     const fetchSettings = async () => {
       try {
-        const settings = await invoke<{ hotkeyCapture: string }>("get_app_settings");
+        const settings = await invoke<{ hotkeyCapture: string; hotkeyFullscreen?: string }>("get_app_settings");
         if (settings?.hotkeyCapture) {
           setCaptureShortcut(settings.hotkeyCapture);
+        }
+        if (settings?.hotkeyFullscreen) {
+          setFullscreenShortcut(settings.hotkeyFullscreen);
         }
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -191,6 +195,7 @@ export default function App() {
         isAlwaysOnTop={isAlwaysOnTop}
         onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
         captureShortcut={captureShortcut}
+        fullscreenShortcut={fullscreenShortcut}
       />
 
       <main className="flex-1 flex overflow-hidden">
@@ -231,7 +236,10 @@ export default function App() {
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
-          onSettingsSaved={(newSettings) => setCaptureShortcut(newSettings.hotkeyCapture)}
+          onSettingsSaved={(newSettings) => {
+            if (newSettings.hotkeyCapture) setCaptureShortcut(newSettings.hotkeyCapture);
+            if (newSettings.hotkeyFullscreen) setFullscreenShortcut(newSettings.hotkeyFullscreen);
+          }}
         />
       )}
     </div>

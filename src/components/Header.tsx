@@ -10,6 +10,7 @@ interface HeaderProps {
   isAlwaysOnTop: boolean;
   onToggleAlwaysOnTop: () => void;
   captureShortcut?: string;
+  fullscreenShortcut?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   isAlwaysOnTop,
   onToggleAlwaysOnTop,
   captureShortcut = "Alt+A",
+  fullscreenShortcut = "Ctrl+Shift+F",
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -92,10 +94,13 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onTriggerFullscreenCapture}
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 text-zinc-200 hover:text-white text-xs font-medium transition-all border border-zinc-700"
-          title="Instant Full Screen Capture (1-Click)"
+          title={`Instant Full Screen Capture (${fullscreenShortcut})`}
         >
           <Monitor className="w-3.5 h-3.5 text-sky-400" />
           <span className="hidden sm:inline">Full Screen</span>
+          <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-zinc-400 px-1 py-0.5 rounded font-mono">
+            {fullscreenShortcut}
+          </kbd>
         </button>
 
         <button

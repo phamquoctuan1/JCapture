@@ -162,6 +162,7 @@ export interface AnnotationProject {
 
 export interface AppSettings {
   hotkeyCapture: string;
+  hotkeyFullscreen?: string;
   hotkeyRecord: string;
   autoStartWithWindows: boolean;
   copyToClipboardOnCapture: boolean;

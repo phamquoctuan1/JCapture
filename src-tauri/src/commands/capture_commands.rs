@@ -274,7 +274,11 @@ pub fn save_app_settings(
 ) -> Result<(), String> {
     let json_str = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
     state.db.set_setting("app_settings", &json_str)?;
-    crate::native::hotkey::update_global_hotkeys(&settings.hotkey_capture, &settings.hotkey_record);
+    crate::native::hotkey::update_global_hotkeys(
+        &settings.hotkey_capture,
+        &settings.hotkey_fullscreen,
+        &settings.hotkey_record,
+    );
     Ok(())
 }
 
