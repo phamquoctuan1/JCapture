@@ -7,14 +7,27 @@ import { Header } from "./components/Header";
 import { RecentWorkspace } from "./components/RecentWorkspace";
 import { EditorModal } from "./components/editor/EditorModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { RecordingToolbar } from "./components/recorder/RecordingToolbar";
+import { VideoPlayerModal } from "./components/recorder/VideoPlayerModal";
 
 export default function App() {
   const [captures, setCaptures] = useState<CaptureRecord[]>([]);
   const [activeEditorRecord, setActiveEditorRecord] = useState<CaptureRecord | null>(null);
+  const [activeVideoRecord, setActiveVideoRecord] = useState<CaptureRecord | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [captureShortcut, setCaptureShortcut] = useState<string>("Alt+A");
   const [fullscreenShortcut, setFullscreenShortcut] = useState<string>("Ctrl+Shift+F");
+  const [recordShortcut, setRecordShortcut] = useState<string>("Ctrl+Shift+R");
+
+  // Screen recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isMicEnabled, setIsMicEnabled] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recordingStartTimeRef = useRef<number>(0);
 
   // Load Recent Captures & Settings on Mount
   useEffect(() => {
@@ -29,12 +42,19 @@ export default function App() {
 
     const fetchSettings = async () => {
       try {
-        const settings = await invoke<{ hotkeyCapture: string; hotkeyFullscreen?: string }>("get_app_settings");
+        const settings = await invoke<{
+          hotkeyCapture: string;
+          hotkeyFullscreen?: string;
+          hotkeyRecord?: string;
+        }>("get_app_settings");
         if (settings?.hotkeyCapture) {
           setCaptureShortcut(settings.hotkeyCapture);
         }
         if (settings?.hotkeyFullscreen) {
           setFullscreenShortcut(settings.hotkeyFullscreen);
+        }
+        if (settings?.hotkeyRecord) {
+          setRecordShortcut(settings.hotkeyRecord);
         }
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -51,15 +71,24 @@ export default function App() {
     window.addEventListener("focus", onWindowFocus);
 
     // Listen for new captures emitted from native overlay / hotkey
-    const unlistenPromise = listen<CaptureRecord>("capture:new", (event) => {
+    const unlistenCapturePromise = listen<CaptureRecord>("capture:new", (event) => {
       const record = event.payload;
       setCaptures((prev) => [record, ...prev.filter((c) => c.id !== record.id)]);
-      setActiveEditorRecord(record);
+      if (record.captureType === "recording") {
+        setActiveVideoRecord(record);
+      } else {
+        setActiveEditorRecord(record);
+      }
 
       const win = getCurrentWindow();
       win.show();
       win.unminimize();
       win.setFocus();
+    });
+
+    // Listen for screen recording start from global hotkey
+    const unlistenRecordPromise = listen("record:start", () => {
+      handleStartRecording();
     });
 
     // Global shortcut Ctrl+N for new blank canvas
@@ -74,7 +103,8 @@ export default function App() {
     return () => {
       window.removeEventListener("focus", onWindowFocus);
       window.removeEventListener("keydown", handleGlobalKeyDown);
-      unlistenPromise.then((unlisten) => unlisten());
+      unlistenCapturePromise.then((unlisten) => unlisten());
+      unlistenRecordPromise.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -115,6 +145,178 @@ export default function App() {
     }
   };
 
+  // --- Screen Recording Workflow ---
+  const handleStartRecording = async () => {
+    try {
+      // 1. Request Display Stream
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 60 } },
+        audio: true,
+      });
+
+      let combinedStream = displayStream;
+
+      // 2. Add microphone stream if enabled
+      if (isMicEnabled) {
+        try {
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const audioCtx = new AudioContext();
+          const dest = audioCtx.createMediaStreamDestination();
+
+          if (displayStream.getAudioTracks().length > 0) {
+            const sysSrc = audioCtx.createMediaStreamSource(displayStream);
+            sysSrc.connect(dest);
+          }
+          const micSrc = audioCtx.createMediaStreamSource(micStream);
+          micSrc.connect(dest);
+
+          combinedStream = new MediaStream([
+            ...displayStream.getVideoTracks(),
+            ...dest.stream.getAudioTracks(),
+          ]);
+        } catch (micErr) {
+          console.warn("Could not capture mic audio:", micErr);
+        }
+      }
+
+      streamRef.current = combinedStream;
+      recordedChunksRef.current = [];
+      recordingStartTimeRef.current = Date.now();
+
+      // 3. Choose supported MIME type
+      const mimeTypes = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+        "video/mp4",
+      ];
+      let selectedMime = "";
+      for (const m of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(m)) {
+          selectedMime = m;
+          break;
+        }
+      }
+
+      const recorder = new MediaRecorder(combinedStream, {
+        mimeType: selectedMime || undefined,
+        videoBitsPerSecond: 6000000, // 6 Mbps high quality
+      });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const durationMs = Date.now() - recordingStartTimeRef.current;
+        const videoBlob = new Blob(recordedChunksRef.current, {
+          type: selectedMime || "video/webm",
+        });
+
+        // Generate thumbnail frame from video blob
+        try {
+          const videoEl = document.createElement("video");
+          videoEl.src = URL.createObjectURL(videoBlob);
+          videoEl.muted = true;
+          videoEl.playsInline = true;
+
+          videoEl.onloadeddata = async () => {
+            videoEl.currentTime = 0.1;
+          };
+
+          videoEl.onseeked = async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = videoEl.videoWidth || 1280;
+            canvas.height = videoEl.videoHeight || 720;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+            }
+            const thumbBase64 = canvas.toDataURL("image/png");
+
+            // Convert video blob to base64
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              const videoBase64 = reader.result as string;
+              try {
+                const savedRecord = await invoke<CaptureRecord>("save_video_recording", {
+                  base64Video: videoBase64,
+                  base64Thumbnail: thumbBase64,
+                  width: canvas.width,
+                  height: canvas.height,
+                  durationMs,
+                });
+
+                setCaptures((prev) => [savedRecord, ...prev]);
+                setActiveVideoRecord(savedRecord);
+
+                const win = getCurrentWindow();
+                win.show();
+                win.unminimize();
+                win.setFocus();
+              } catch (saveErr) {
+                console.error("Failed to save recording record:", saveErr);
+              }
+            };
+            reader.readAsDataURL(videoBlob);
+          };
+        } catch (thumbErr) {
+          console.error("Failed to generate video thumbnail:", thumbErr);
+        }
+
+        // Clean up streams
+        combinedStream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        setIsRecording(false);
+        setIsPaused(false);
+      };
+
+      // Handle user stopping screen share via browser bar
+      displayStream.getVideoTracks()[0].onended = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.stop();
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(500); // 500ms chunk interval
+      setIsRecording(true);
+      setIsPaused(false);
+    } catch (e) {
+      console.error("Screen recording setup failed / cancelled:", e);
+    }
+  };
+
+  const handlePauseResumeRecording = () => {
+    if (!mediaRecorderRef.current) return;
+    if (isPaused) {
+      mediaRecorderRef.current.resume();
+      setIsPaused(false);
+    } else {
+      mediaRecorderRef.current.pause();
+      setIsPaused(true);
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const handleCancelRecording = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    recordedChunksRef.current = [];
+    setIsRecording(false);
+    setIsPaused(false);
+  };
+
   const handleTogglePin = async (id: string, isPinned: boolean) => {
     try {
       await invoke("toggle_pin_capture", { id, isPinned });
@@ -137,6 +339,9 @@ export default function App() {
       setCaptures((prev) => prev.filter((c) => c.id !== id));
       if (activeEditorRecord?.id === id) {
         setActiveEditorRecord(null);
+      }
+      if (activeVideoRecord?.id === id) {
+        setActiveVideoRecord(null);
       }
     } catch (err) {
       console.error("Failed to delete capture:", err);
@@ -180,6 +385,9 @@ export default function App() {
       if (activeEditorRecord && ids.includes(activeEditorRecord.id)) {
         setActiveEditorRecord(null);
       }
+      if (activeVideoRecord && ids.includes(activeVideoRecord.id)) {
+        setActiveVideoRecord(null);
+      }
     } catch (err) {
       console.error("Failed to delete captures:", err);
     }
@@ -190,12 +398,14 @@ export default function App() {
       <Header
         onTriggerCapture={handleTriggerCapture}
         onTriggerFullscreenCapture={handleTriggerFullscreenCapture}
+        onTriggerRecord={handleStartRecording}
         onNewBlankCanvas={handleNewBlankCanvas}
         onOpenSettings={() => setShowSettings(true)}
         isAlwaysOnTop={isAlwaysOnTop}
         onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
         captureShortcut={captureShortcut}
         fullscreenShortcut={fullscreenShortcut}
+        recordShortcut={recordShortcut}
       />
 
       <main className="flex-1 flex overflow-hidden">
@@ -203,8 +413,12 @@ export default function App() {
           captures={captures}
           captureShortcut={captureShortcut}
           onOpenEditor={(record) => {
-            setInitialMergeConfig(undefined);
-            setActiveEditorRecord(record);
+            if (record.captureType === "recording") {
+              setActiveVideoRecord(record);
+            } else {
+              setInitialMergeConfig(undefined);
+              setActiveEditorRecord(record);
+            }
           }}
           onTogglePin={handleTogglePin}
           onDelete={handleDelete}
@@ -214,6 +428,26 @@ export default function App() {
         />
       </main>
 
+      {/* Floating Recording Toolbar */}
+      <RecordingToolbar
+        isRecording={isRecording}
+        isPaused={isPaused}
+        onPauseResume={handlePauseResumeRecording}
+        onStop={handleStopRecording}
+        onCancel={handleCancelRecording}
+        isMicEnabled={isMicEnabled}
+        onToggleMic={() => setIsMicEnabled(!isMicEnabled)}
+      />
+
+      {/* Video Player Modal */}
+      {activeVideoRecord && (
+        <VideoPlayerModal
+          record={activeVideoRecord}
+          onClose={() => setActiveVideoRecord(null)}
+          onDelete={handleDelete}
+        />
+      )}
+
       {/* Editor Modal */}
       {activeEditorRecord && (
         <EditorModal
@@ -221,8 +455,13 @@ export default function App() {
           captures={captures}
           initialMerge={initialMergeConfig}
           onSelectRecord={(record) => {
-            setInitialMergeConfig(undefined);
-            setActiveEditorRecord(record);
+            if (record.captureType === "recording") {
+              setActiveEditorRecord(null);
+              setActiveVideoRecord(record);
+            } else {
+              setInitialMergeConfig(undefined);
+              setActiveEditorRecord(record);
+            }
           }}
           onClose={() => {
             setActiveEditorRecord(null);
@@ -239,9 +478,11 @@ export default function App() {
           onSettingsSaved={(newSettings) => {
             if (newSettings.hotkeyCapture) setCaptureShortcut(newSettings.hotkeyCapture);
             if (newSettings.hotkeyFullscreen) setFullscreenShortcut(newSettings.hotkeyFullscreen);
+            if (newSettings.hotkeyRecord) setRecordShortcut(newSettings.hotkeyRecord);
           }}
         />
       )}
     </div>
   );
 }
+

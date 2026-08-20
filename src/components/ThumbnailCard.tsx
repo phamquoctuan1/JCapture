@@ -119,32 +119,48 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
           </button>
         )}
 
+        {/* Video Badge */}
+        {record.captureType === "recording" && (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-red-950/80 border border-red-700/60 text-red-300 px-1.5 py-0.5 rounded text-[9px] font-semibold backdrop-blur-md shadow-md">
+            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+            <span>VIDEO</span>
+          </div>
+        )}
+
         {/* Hover Overlay Action Bar - Compact and sleek */}
         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
-          <button
-            onClick={handleCopyOriginal}
-            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-sky-600 text-white transition-all transform hover:scale-105 shadow-md"
-            title="Copy to Clipboard"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenEditor(record);
-            }}
-            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-indigo-600 text-white transition-all transform hover:scale-105 shadow-md"
-            title="Edit Annotations"
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleOpenFolder}
-            className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-white transition-all transform hover:scale-105 shadow-md"
-            title="Show in Folder"
-          >
-            <Folder className="w-3.5 h-3.5" />
-          </button>
+          {record.captureType === "recording" ? (
+            <div className="w-10 h-10 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg transform hover:scale-110 transition-transform">
+              <span className="text-xs font-bold">▶</span>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={handleCopyOriginal}
+                className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-sky-600 text-white transition-all transform hover:scale-105 shadow-md"
+                title="Copy to Clipboard"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenEditor(record);
+                }}
+                className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-indigo-600 text-white transition-all transform hover:scale-105 shadow-md"
+                title="Edit Annotations"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleOpenFolder}
+                className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-white transition-all transform hover:scale-105 shadow-md"
+                title="Show in Folder"
+              >
+                <Folder className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
         </div>
 
         {/* Pin Badge Button */}

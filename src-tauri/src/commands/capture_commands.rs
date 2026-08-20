@@ -332,6 +332,109 @@ pub fn export_image_as_dialog(base64_data: String, default_name: Option<String>)
 }
 
 #[tauri::command]
+pub fn save_video_recording(
+    state: State<'_, AppState>,
+    base64_video: String,
+    base64_thumbnail: String,
+    width: u32,
+    height: u32,
+    duration_ms: u64,
+) -> Result<CaptureRecord, String> {
+    let raw_vid_b64 = if let Some(idx) = base64_video.find(',') {
+        &base64_video[idx + 1..]
+    } else {
+        &base64_video
+    };
+    let vid_bytes = base64_decode(raw_vid_b64).map_err(|e| format!("Video decode error: {}", e))?;
+
+    let raw_thumb_b64 = if let Some(idx) = base64_thumbnail.find(',') {
+        &base64_thumbnail[idx + 1..]
+    } else {
+        &base64_thumbnail
+    };
+    let thumb_bytes = base64_decode(raw_thumb_b64).map_err(|e| format!("Thumbnail decode error: {}", e))?;
+
+    let capture_id = uuid::Uuid::new_v4().to_string();
+    let video_filename = format!("{}.webm", capture_id);
+    let thumb_filename = format!("{}.png", capture_id);
+
+    let video_path = state.paths.recordings_dir.join(&video_filename);
+    let thumb_path = state.paths.thumbnails_dir.join(&thumb_filename);
+
+    std::fs::write(&video_path, &vid_bytes).map_err(|e| format!("Failed to write video file: {}", e))?;
+    std::fs::write(&thumb_path, &thumb_bytes).map_err(|e| format!("Failed to write thumbnail: {}", e))?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = CaptureRecord {
+        id: capture_id,
+        capture_type: "recording".to_string(),
+        original_path: video_path.to_string_lossy().to_string(),
+        thumbnail_path: thumb_path.to_string_lossy().to_string(),
+        project_path: None,
+        width,
+        height,
+        monitor_id: Some(format!("{}ms", duration_ms)),
+        is_pinned: false,
+        is_closed: false,
+        created_at: now,
+        updated_at: now,
+        last_opened_at: Some(now),
+    };
+
+    state.db.insert_capture(&record)?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub fn export_video_as_dialog(base64_data: String, default_name: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::PWSTR;
+        use windows::Win32::UI::Controls::Dialogs::{GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST};
+
+        let raw_b64 = if let Some(idx) = base64_data.find(',') {
+            &base64_data[idx + 1..]
+        } else {
+            &base64_data
+        };
+        let bytes = base64_decode(raw_b64).map_err(|e| format!("Decode error: {}", e))?;
+
+        let fname = default_name.unwrap_or_else(|| format!("Recording_{}.webm", chrono::Local::now().format("%Y%m%d_%H%M%S")));
+        let mut file_buf = [0u16; 512];
+        let fname_wide: Vec<u16> = fname.encode_utf16().collect();
+        let copy_len = fname_wide.len().min(510);
+        file_buf[..copy_len].copy_from_slice(&fname_wide[..copy_len]);
+
+        let filter = windows::core::w!("WebM Video (*.webm)\0*.webm\0MP4 Video (*.mp4)\0*.mp4\0All Files (*.*)\0*.*\0\0");
+        let def_ext = windows::core::w!("webm");
+
+        let mut ofn = OPENFILENAMEW {
+            lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+            hwndOwner: windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+            lpstrFilter: filter,
+            lpstrFile: PWSTR(file_buf.as_mut_ptr()),
+            nMaxFile: 512,
+            lpstrDefExt: def_ext,
+            Flags: OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+            ..Default::default()
+        };
+
+        if GetSaveFileNameW(&mut ofn).as_bool() {
+            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+            let path_str = String::from_utf16_lossy(&file_buf[..len]);
+            std::fs::write(&path_str, bytes).map_err(|e| e.to_string())?;
+            Ok(Some(path_str))
+        } else {
+            Ok(None)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }

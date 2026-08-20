@@ -123,6 +123,7 @@ pub fn run() {
 
             let h_capture = handle_for_hotkey.clone();
             let h_fullscreen = handle_for_hotkey.clone();
+            let h_record = handle_for_hotkey.clone();
             let paths_for_fullscreen = Arc::clone(&app_paths_clone);
             let db_for_fullscreen = Arc::clone(&db_clone);
 
@@ -194,7 +195,13 @@ pub fn run() {
                     });
                 }),
                 Arc::new(move || {
-                    println!("Screen recording shortcut triggered");
+                    if let Some(window) = h_record.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                        let _ = window.emit("record:start", ());
+                    }
+                    let _ = h_record.emit("record:start", ());
                 }),
             );
 
@@ -228,6 +235,8 @@ pub fn run() {
             get_app_settings,
             save_app_settings,
             export_image_as_dialog,
+            save_video_recording,
+            export_video_as_dialog,
             get_app_version,
             download_and_install_update
         ])

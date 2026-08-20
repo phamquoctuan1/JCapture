@@ -1,27 +1,31 @@
 import React, { useState } from "react";
-import { Camera, Settings, Pin, Monitor, Minus, Square, X, PlusSquare } from "lucide-react";
+import { Camera, Settings, Pin, Monitor, Minus, Square, X, PlusSquare, Video } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface HeaderProps {
   onTriggerCapture: () => void;
   onTriggerFullscreenCapture: () => void;
+  onTriggerRecord: () => void;
   onNewBlankCanvas: () => void;
   onOpenSettings: () => void;
   isAlwaysOnTop: boolean;
   onToggleAlwaysOnTop: () => void;
   captureShortcut?: string;
   fullscreenShortcut?: string;
+  recordShortcut?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onTriggerCapture,
   onTriggerFullscreenCapture,
+  onTriggerRecord,
   onNewBlankCanvas,
   onOpenSettings,
   isAlwaysOnTop,
   onToggleAlwaysOnTop,
   captureShortcut = "Alt+A",
   fullscreenShortcut = "Ctrl+Shift+F",
+  recordShortcut = "Ctrl+Shift+R",
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -100,6 +104,19 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden sm:inline">Full Screen</span>
           <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-zinc-400 px-1 py-0.5 rounded font-mono">
             {fullscreenShortcut}
+          </kbd>
+        </button>
+
+        <button
+          onClick={onTriggerRecord}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 text-red-400 hover:text-red-300 text-xs font-medium transition-all border border-zinc-700"
+          title={`Screen Recording (${recordShortcut})`}
+        >
+          <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <Video className="w-3.5 h-3.5 text-red-400" />
+          <span className="hidden sm:inline">Record</span>
+          <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-zinc-400 px-1 py-0.5 rounded font-mono">
+            {recordShortcut}
           </kbd>
         </button>
 
