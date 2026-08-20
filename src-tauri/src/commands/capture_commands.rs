@@ -420,25 +420,33 @@ pub async fn download_and_install_update(
             std::thread::sleep(std::time::Duration::from_millis(500));
             std::process::exit(0);
         });
-    } else {
-        // Portable binary in-place update with retry loop until Windows file-lock is fully released
+        // Portable binary in-place update with Atomic Rename Replacement pattern
         let ps_updater = format!(
-            "$pidToWait = {}; $src = '{}'; $dst = '{}'; \
-             Start-Sleep -Milliseconds 500; \
-             while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
-             $copied = $false; \
+            "$pidToWait = {}; $src = '{}'; $dst = '{}'; $dstOld = \"$dst.old\"; \
+             Start-Sleep -Milliseconds 400; \
+             while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 150 }}; \
+             Remove-Item -LiteralPath $dstOld -Force -ErrorAction SilentlyContinue; \
+             $replaced = $false; \
              for ($i = 0; $i -lt 30; $i++) {{ \
                  try {{ \
-                     Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; \
-                     $copied = $true; \
+                     Move-Item -LiteralPath $dst -Destination $dstOld -Force -ErrorAction Stop; \
+                     Move-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; \
+                     $replaced = $true; \
                      break; \
                  }} catch {{ \
-                     Start-Sleep -Milliseconds 300; \
+                     try {{ \
+                         Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; \
+                         $replaced = $true; \
+                         break; \
+                     }} catch {{ \
+                         Start-Sleep -Milliseconds 250; \
+                     }} \
                  }} \
              }}; \
-             if ($copied) {{ \
+             if ($replaced) {{ \
                  Start-Process -FilePath $dst -WindowStyle Normal; \
-                 Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue; \
+                 Start-Sleep -Milliseconds 500; \
+                 Remove-Item -LiteralPath $dstOld -Force -ErrorAction SilentlyContinue; \
              }} else {{ \
                  Start-Process -FilePath $src -WindowStyle Normal; \
              }}",

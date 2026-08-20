@@ -1,6 +1,6 @@
 [package]
 name = "jcapture"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lightweight Screen Capture and Workspace for Windows"
 authors = ["JCapture"]
 edition = "2021"
