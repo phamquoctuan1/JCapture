@@ -396,30 +396,34 @@ pub async fn download_and_install_update(
             .to_string_lossy()
             .to_string();
         let current_pid = std::process::id();
-        let bat_path = temp_dir.join("jcapture_updater.bat");
 
-        let bat_content = format!(
-            "@echo off\r\ntimeout /t 1 /nobreak >nul\r\n:wait_loop\r\ntasklist /fi \"PID eq {}\" | find \"{}\" >nul\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >nul\r\n  goto wait_loop\r\n)\r\ncopy /y \"{}\" \"{}\" >nul\r\nstart \"\" \"{}\"\r\ndel \"{}\" >nul 2>&1\r\ndel \"%~f0\" >nul 2>&1\r\n",
-            current_pid, current_pid, dest_str, current_exe, current_exe, dest_str
+        // Use a hidden background powershell process to wait for exit, overwrite executable, and relaunch
+        let ps_updater = format!(
+            "$pidToWait = {}; $src = '{}'; $dst = '{}'; \
+             Start-Sleep -Milliseconds 400; \
+             while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
+             Copy-Item -LiteralPath $src -Destination $dst -Force; \
+             Start-Process -FilePath $dst; \
+             Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue;",
+            current_pid,
+            dest_str.replace('\'', "''"),
+            current_exe.replace('\'', "''")
         );
 
-        std::fs::write(&bat_path, bat_content)
-            .map_err(|e| format!("Failed to create updater script: {}", e))?;
-
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "/b", "", &bat_path.to_string_lossy()])
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_updater])
             .spawn();
 
-        // Gracefully exit current process after short delay so batch script can replace binary
+        // Gracefully exit current process so destination binary can be overwritten
         std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             std::process::exit(0);
         });
     } else {
         // Setup installer execution
         let _ = std::process::Command::new(&downloaded_file).spawn();
         std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             std::process::exit(0);
         });
     }
