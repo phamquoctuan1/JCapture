@@ -137,6 +137,25 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const [loadError, setLoadError] = useState(false);
+
+  const handleVideoError = async () => {
+    console.warn("Video failed to play via convertFileSrc, falling back to base64 data URL...");
+    try {
+      const b64 = await invoke<string>("read_image_base64", {
+        filePath: record.originalPath,
+      });
+      if (b64) {
+        const mime = record.originalPath.toLowerCase().endsWith(".mp4") ? "video/mp4" : "video/webm";
+        const dataUrl = b64.startsWith("data:") ? b64 : `data:${mime};base64,${b64}`;
+        setVideoSrc(dataUrl);
+      }
+    } catch (e) {
+      console.error("Base64 fallback failed:", e);
+      setLoadError(true);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6 select-none animate-in fade-in duration-200">
       <div className="flex flex-col bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl max-w-4xl w-full max-h-[90vh]">
@@ -175,7 +194,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
             <button
               onClick={handleExport}
-              disabled={exporting || !videoSrc}
+              disabled={exporting}
               className="flex items-center gap-1 text-[11px] font-semibold text-white bg-[#F36F21] hover:bg-[#ff7d33] px-3 py-1 rounded shadow-md shadow-orange-600/30 transition-all disabled:opacity-50"
               title="Save As WebM / MP4 Video"
             >
@@ -211,10 +230,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           onClick={togglePlay}
           className="relative flex-1 bg-zinc-950 flex items-center justify-center overflow-hidden min-h-[380px] max-h-[580px] cursor-pointer group"
         >
-          {videoSrc ? (
+          {videoSrc && !loadError ? (
             <video
               ref={videoRef}
               src={videoSrc}
+              onError={handleVideoError}
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={handleLoadedMetadata}
               onEnded={() => setIsPlaying(false)}
@@ -222,13 +242,13 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               playsInline
             />
           ) : (
-            <div className="flex items-center gap-2 text-zinc-400 text-xs animate-pulse">
-              <span>Loading video...</span>
+            <div className="flex items-center gap-2 text-zinc-400 text-xs">
+              <span>{loadError ? "Cannot load video playback" : "Loading video..."}</span>
             </div>
           )}
 
           {/* Large Center Play Overlay when paused */}
-          {!isPlaying && videoSrc && (
+          {!isPlaying && videoSrc && !loadError && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-all pointer-events-none">
               <div className="w-16 h-16 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-2xl transform scale-100 group-hover:scale-110 transition-transform">
                 <Play className="w-8 h-8 fill-current ml-1" />

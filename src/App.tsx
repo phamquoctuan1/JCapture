@@ -266,30 +266,33 @@ export default function App() {
         setIsRecording(false);
         setIsPaused(false);
 
-        // 2. Read raw binary bytes and save directly to Rust backend
-        try {
-          const arrayBuffer = await videoBlob.arrayBuffer();
-          const videoBytes = Array.from(new Uint8Array(arrayBuffer));
+        // 2. Convert Blob to Base64 using FileReader and call save_video_recording
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64Video = reader.result as string;
+          try {
+            const savedRecord = await invoke<CaptureRecord>("save_video_recording", {
+              base64Video,
+              thumbnailBase64: thumbBase64 || "",
+              width,
+              height,
+              durationMs,
+            });
 
-          const savedRecord = await invoke<CaptureRecord>("save_video_recording_bytes", {
-            videoBytes,
-            thumbnailBase64: thumbBase64 || "",
-            width,
-            height,
-            durationMs,
-          });
+            console.log("Video saved successfully:", savedRecord);
+            setCaptures((prev) => [savedRecord, ...prev.filter((c) => c.id !== savedRecord.id)]);
+            setActiveVideoRecord(savedRecord);
 
-          setCaptures((prev) => [savedRecord, ...prev.filter((c) => c.id !== savedRecord.id)]);
-          setActiveVideoRecord(savedRecord);
-
-          const win = getCurrentWindow();
-          await win.show();
-          await win.unminimize();
-          await win.setFocus();
-        } catch (saveErr) {
-          console.error("Failed to save recording record:", saveErr);
-          alert(`Lỗi lưu video: ${saveErr}`);
-        }
+            const win = getCurrentWindow();
+            await win.show();
+            await win.unminimize();
+            await win.setFocus();
+          } catch (saveErr) {
+            console.error("Failed to save recording record:", saveErr);
+            alert(`Lỗi lưu video: ${saveErr}`);
+          }
+        };
+        reader.readAsDataURL(videoBlob);
       };
 
       // Handle user stopping screen share via browser bar

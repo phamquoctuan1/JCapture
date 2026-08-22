@@ -343,15 +343,27 @@ pub fn export_image_as_dialog(base64_data: String, default_name: Option<String>)
 }
 
 #[tauri::command]
-pub fn save_video_recording_bytes(
+pub fn save_video_recording(
     state: State<'_, AppState>,
-    video_bytes: Vec<u8>,
+    base64_video: String,
     thumbnail_base64: String,
     width: u32,
     height: u32,
     duration_ms: u64,
 ) -> Result<CaptureRecord, String> {
-    if video_bytes.is_empty() {
+    println!("[JCapture] Receiving video data: {} chars base64", base64_video.len());
+    let raw_vid_b64 = if let Some(idx) = base64_video.find(',') {
+        &base64_video[idx + 1..]
+    } else {
+        &base64_video
+    };
+    let clean_vid: String = raw_vid_b64.chars().filter(|c| !c.is_whitespace()).collect();
+    let vid_bytes = base64::engine::general_purpose::STANDARD.decode(&clean_vid)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&clean_vid))
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&clean_vid))
+        .map_err(|e| format!("Video decode error: {}", e))?;
+
+    if vid_bytes.is_empty() {
         return Err("Video stream data is empty".to_string());
     }
 
@@ -362,7 +374,8 @@ pub fn save_video_recording_bytes(
     let video_path = state.paths.recordings_dir.join(&video_filename);
     let thumb_path = state.paths.thumbnails_dir.join(&thumb_filename);
 
-    std::fs::write(&video_path, &video_bytes).map_err(|e| format!("Failed to write video file: {}", e))?;
+    std::fs::write(&video_path, &vid_bytes).map_err(|e| format!("Failed to write video file: {}", e))?;
+    println!("[JCapture] Video file written to disk: {} ({} bytes)", video_path.display(), vid_bytes.len());
 
     // Try saving thumbnail if available
     let raw_thumb_b64 = if let Some(idx) = thumbnail_base64.find(',') {
@@ -398,30 +411,8 @@ pub fn save_video_recording_bytes(
     };
 
     state.db.insert_capture(&record)?;
+    println!("[JCapture] Video saved to DB successfully: {}", record.id);
     Ok(record)
-}
-
-#[tauri::command]
-pub fn save_video_recording(
-    state: State<'_, AppState>,
-    base64_video: String,
-    base64_thumbnail: String,
-    width: u32,
-    height: u32,
-    duration_ms: u64,
-) -> Result<CaptureRecord, String> {
-    let raw_vid_b64 = if let Some(idx) = base64_video.find(',') {
-        &base64_video[idx + 1..]
-    } else {
-        &base64_video
-    };
-    let clean_vid: String = raw_vid_b64.chars().filter(|c| !c.is_whitespace()).collect();
-    let vid_bytes = base64::engine::general_purpose::STANDARD.decode(&clean_vid)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&clean_vid))
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&clean_vid))
-        .map_err(|e| format!("Video decode error: {}", e))?;
-
-    save_video_recording_bytes(state, vid_bytes, base64_thumbnail, width, height, duration_ms)
 }
 
 #[tauri::command]
