@@ -236,6 +236,8 @@ pub fn run() {
             save_app_settings,
             export_image_as_dialog,
             save_video_recording,
+            save_video_recording_bytes,
+            export_video_file,
             export_video_as_dialog,
             get_app_version,
             download_and_install_update

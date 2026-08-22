@@ -13,7 +13,7 @@ import {
   Check,
   Film,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { CaptureRecord } from "../../types";
 
 interface VideoPlayerModalProps {
@@ -33,33 +33,12 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [videoSrc, setVideoSrc] = useState<string>("");
+  const [videoSrc, setVideoSrc] = useState<string>(() => convertFileSrc(record.originalPath));
   const [copied, setCopied] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  // Load video as Base64 / Blob data from Tauri backend
   useEffect(() => {
-    let isMounted = true;
-    const loadVideo = async () => {
-      try {
-        const b64 = await invoke<string>("read_image_base64", {
-          filePath: record.originalPath,
-        });
-        if (isMounted) {
-          // Replace mime type if needed
-          const src = b64.startsWith("data:")
-            ? b64.replace(/^data:[^;]+;/, "data:video/webm;")
-            : `data:video/webm;base64,${b64}`;
-          setVideoSrc(src);
-        }
-      } catch (e) {
-        console.error("Failed to load video file:", e);
-      }
-    };
-    loadVideo();
-    return () => {
-      isMounted = false;
-    };
+    setVideoSrc(convertFileSrc(record.originalPath));
   }, [record.originalPath]);
 
   // Handle keyboard hotkeys (Space to toggle play, Esc to close)
@@ -124,11 +103,10 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   };
 
   const handleExport = async () => {
-    if (!videoSrc) return;
     setExporting(true);
     try {
-      await invoke("export_video_as_dialog", {
-        base64Data: videoSrc,
+      await invoke("export_video_file", {
+        filePath: record.originalPath,
         defaultName: `Recording_${new Date().toISOString().replace(/[:.]/g, "-")}.webm`,
       });
     } catch (e) {
