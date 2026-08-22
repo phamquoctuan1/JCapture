@@ -275,15 +275,21 @@ pub fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettings, Strin
 #[tauri::command]
 pub fn save_app_settings(
     state: State<'_, AppState>,
-    settings: AppSettings,
+    settings: Option<AppSettings>,
+    new_settings: Option<AppSettings>,
 ) -> Result<(), String> {
-    let json_str = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    let final_settings = settings
+        .or(new_settings)
+        .ok_or_else(|| "Missing settings argument".to_string())?;
+
+    let json_str = serde_json::to_string(&final_settings).map_err(|e| e.to_string())?;
     state.db.set_setting("app_settings", &json_str)?;
     crate::native::hotkey::update_global_hotkeys(
-        &settings.hotkey_capture,
-        &settings.hotkey_fullscreen,
-        &settings.hotkey_record,
+        &final_settings.hotkey_capture,
+        &final_settings.hotkey_fullscreen,
+        &final_settings.hotkey_record,
     );
+    println!("[JCapture] App settings saved successfully: {:?}", final_settings);
     Ok(())
 }
 

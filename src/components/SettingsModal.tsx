@@ -56,6 +56,14 @@ const PRESET_FULLSCREEN_SHORTCUTS = [
   "Alt+F",
 ];
 
+const PRESET_RECORD_SHORTCUTS = [
+  "Ctrl+Shift+R",
+  "Ctrl+Alt+R",
+  "F9",
+  "F10",
+  "Alt+R",
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSettingsSaved,
@@ -71,6 +79,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   });
   const [isRecordingCapture, setIsRecordingCapture] = useState(false);
   const [isRecordingFullscreen, setIsRecordingFullscreen] = useState(false);
+  const [isRecordingRecord, setIsRecordingRecord] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Update checking state
@@ -91,6 +100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setSettings({
           ...s,
           hotkeyFullscreen: s.hotkeyFullscreen || "Ctrl+Shift+F",
+          hotkeyRecord: s.hotkeyRecord || "Ctrl+Shift+R",
         });
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -107,7 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isRecordingCapture && !isRecordingFullscreen) return;
+    if (!isRecordingCapture && !isRecordingFullscreen && !isRecordingRecord) return;
     e.preventDefault();
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
@@ -124,13 +134,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       } else if (isRecordingFullscreen) {
         setSettings((prev) => ({ ...prev, hotkeyFullscreen: combo }));
         setIsRecordingFullscreen(false);
+      } else if (isRecordingRecord) {
+        setSettings((prev) => ({ ...prev, hotkeyRecord: combo }));
+        setIsRecordingRecord(false);
       }
     }
   };
 
   const handleSave = async () => {
     try {
-      await invoke("save_app_settings", { newSettings: settings });
+      await invoke("save_app_settings", { settings });
       if (onSettingsSaved) onSettingsSaved(settings);
       setSaved(true);
       setTimeout(() => {
@@ -139,6 +152,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }, 600);
     } catch (err) {
       console.error("Failed to save settings:", err);
+      alert(`Không thể lưu cài đặt: ${err}`);
     }
   };
 
@@ -354,12 +368,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
-            {/* Screen Recording Hotkey (Future) */}
-            <div className="flex items-center justify-between bg-zinc-950/60 p-3 rounded-lg border border-zinc-800">
-              <span>Screen Recording:</span>
-              <kbd className="px-2.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-sky-400 font-mono text-[11px]">
-                {settings.hotkeyRecord}
-              </kbd>
+            {/* Screen Recording Hotkey */}
+            <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-300">Recording Shortcut:</span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={settings.hotkeyRecord || "Ctrl+Shift+R"}
+                    onChange={(e) => setSettings({ ...settings, hotkeyRecord: e.target.value })}
+                    className="w-32 bg-zinc-900 border border-zinc-700 px-2 py-1 rounded text-sky-400 font-mono text-xs text-center focus:outline-none focus:border-sky-500"
+                    placeholder="e.g. Ctrl+Shift+R"
+                  />
+                  <button
+                    onClick={() => setIsRecordingRecord(!isRecordingRecord)}
+                    className={`px-2.5 py-1 rounded font-mono font-semibold text-xs transition-all ${
+                      isRecordingRecord
+                        ? "bg-amber-500 text-black ring-2 ring-amber-400 animate-pulse"
+                        : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                    }`}
+                    title="Click then press any key combination on keyboard"
+                  >
+                    {isRecordingRecord ? "Press key..." : "Record"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Presets */}
+              <div className="pt-1 flex flex-wrap gap-1 items-center">
+                <span className="text-[10px] text-zinc-400 mr-1">Presets:</span>
+                {PRESET_RECORD_SHORTCUTS.map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      setSettings({ ...settings, hotkeyRecord: preset });
+                      setIsRecordingRecord(false);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                      (settings.hotkeyRecord || "Ctrl+Shift+R") === preset
+                        ? "bg-sky-600 text-white font-semibold"
+                        : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
