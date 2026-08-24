@@ -899,6 +899,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const { x, y } = getCanvasCoords(e);
     startPosRef.current = { x, y };
 
+    if (textBoxEditor.visible) {
+      handleCommitTextBox();
+    }
+
     if (activeTool === "eyedropper") {
       const canvas = canvasRef.current;
       if (canvas) {
@@ -2421,6 +2425,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                     bottom: "calc(100% + 6px)",
                     left: 0,
                   }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
                   className="flex flex-wrap items-center gap-1.5 bg-zinc-900/95 border border-zinc-700/80 p-1.5 rounded-xl shadow-2xl text-xs z-50 whitespace-nowrap backdrop-blur-md max-w-[540px]"
                 >
                   {/* Font Size */}
@@ -2429,6 +2435,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                       <button
                         key={sz}
                         type="button"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => setTextBoxEditor((prev) => ({ ...prev, fontSize: sz }))}
                         className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
                           textBoxEditor.fontSize === sz
@@ -2445,6 +2452,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, bold: !prev.bold }))}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.bold
@@ -2458,6 +2466,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, italic: !prev.italic }))}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.italic
@@ -2471,6 +2480,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, underline: !prev.underline }))}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.underline
@@ -2490,6 +2500,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                       <button
                         key={c}
                         type="button"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => setTextBoxEditor((prev) => ({ ...prev, textColor: c }))}
                         className={`w-3 h-3 rounded-full transition-transform ${
                           textBoxEditor.textColor.toUpperCase() === c.toUpperCase()
@@ -2514,6 +2525,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBorder: !prev.hasBorder }))}
                       className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
                         textBoxEditor.hasBorder
@@ -2530,6 +2542,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                           <button
                             key={c}
                             type="button"
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={() => setTextBoxEditor((prev) => ({ ...prev, borderColor: c }))}
                             className={`w-2.5 h-2.5 rounded-full transition-transform ${
                               textBoxEditor.borderColor.toUpperCase() === c.toUpperCase()
@@ -2544,6 +2557,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                           <button
                             key={w}
                             type="button"
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={() => setTextBoxEditor((prev) => ({ ...prev, borderWidth: w }))}
                             className={`px-1 py-0.2 text-[9px] font-mono rounded ${
                               textBoxEditor.borderWidth === w
@@ -2562,6 +2576,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBg: !prev.hasBg }))}
                       className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
                         textBoxEditor.hasBg
@@ -2583,6 +2598,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                           <button
                             key={item.name}
                             type="button"
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={() => setTextBoxEditor((prev) => ({ ...prev, bgColor: item.val }))}
                             className={`w-2.5 h-2.5 rounded-full transition-transform ${
                               textBoxEditor.bgColor.toUpperCase() === item.val.toUpperCase()
@@ -2600,6 +2616,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   <div className="flex items-center gap-1 ml-auto">
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={handleCommitTextBox}
                       className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-lg flex items-center gap-1 shadow-md shadow-emerald-600/20"
                     >
@@ -2609,6 +2626,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
                     <button
                       type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }))}
                       className="p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
                       title="Cancel (Esc)"
@@ -2639,13 +2657,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                         handleCommitTextBox();
                       }
                     } else if (e.key === "Escape") {
-                      setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
-                    }
-                  }}
-                  onBlur={() => {
-                    if (textBoxEditor.text.trim()) {
-                      handleCommitTextBox();
-                    } else {
                       setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
                     }
                   }}
