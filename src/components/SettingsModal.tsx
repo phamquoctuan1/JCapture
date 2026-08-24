@@ -36,6 +36,19 @@ interface ReleaseInfo {
   assets?: ReleaseAsset[];
 }
 
+function isNewerVersion(latest: string, current: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const l = parse(latest);
+  const c = parse(current);
+  for (let i = 0; i < Math.max(l.length, c.length); i++) {
+    const lPart = l[i] || 0;
+    const cPart = c[i] || 0;
+    if (lPart > cPart) return true;
+    if (lPart < cPart) return false;
+  }
+  return false;
+}
+
 const PRESET_SHORTCUTS = [
   "Alt+A",
   "Ctrl+Shift+A",
@@ -195,7 +208,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const latestVer = release.tag_name.replace(/^v/, "").trim();
       const currentVer = activeVer.replace(/^v/, "").trim();
 
-      if (latestVer !== currentVer) {
+      if (isNewerVersion(latestVer, currentVer)) {
         setUpdateStatus("available");
       } else {
         setUpdateStatus("latest");
@@ -209,7 +222,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleDownloadAndInstall = async () => {
+  const handleDownloadAndInstall = async (preferred: "portable" | "setup" = "portable") => {
     if (!latestRelease) return;
     setIsDownloading(true);
     setDownloadMessage("Downloading latest update from GitHub...");
@@ -217,13 +230,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const setupAsset = latestRelease.assets?.find((a) => a.name.includes("setup.exe"));
     const portableAsset = latestRelease.assets?.find((a) => a.name.includes("Portable.exe"));
     const msiAsset = latestRelease.assets?.find((a) => a.name.endsWith(".msi"));
-    const exeAsset = setupAsset || portableAsset || msiAsset;
+
+    const targetAsset = preferred === "portable"
+      ? (portableAsset || setupAsset || msiAsset)
+      : (setupAsset || portableAsset || msiAsset);
 
     try {
-      if (exeAsset) {
-        setDownloadMessage("Updating JCapture and restarting into new version...");
+      if (targetAsset) {
+        setDownloadMessage(`Downloading ${targetAsset.name} & restarting...`);
         await invoke("download_and_install_update", {
-          downloadUrl: exeAsset.browser_download_url,
+          downloadUrl: targetAsset.browser_download_url,
         });
       } else {
         window.open(latestRelease.html_url, "_blank");
@@ -508,22 +524,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   {/* 1-Click Update Button & Browser Download */}
                   <div className="pt-1 flex flex-col gap-1.5">
-                    <button
-                      onClick={handleDownloadAndInstall}
-                      disabled={isDownloading}
-                      className="w-full flex items-center justify-center gap-2 py-2 bg-[#F36F21] hover:bg-[#ff7d33] active:bg-[#d95d14] disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-lg shadow-orange-600/25 transition-all"
-                    >
-                      <Download className={`w-3.5 h-3.5 ${isDownloading ? "animate-bounce" : ""}`} />
-                      <span>
-                        {isDownloading ? "Downloading & Launching Update..." : "Download & Install Update Now"}
-                      </span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleDownloadAndInstall("portable")}
+                        disabled={isDownloading}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-[#F36F21] hover:bg-[#ff7d33] active:bg-[#d95d14] disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-lg shadow-orange-600/25 transition-all"
+                        title="Update standalone JCapture-Portable.exe"
+                      >
+                        <Download className={`w-3.5 h-3.5 ${isDownloading ? "animate-bounce" : ""}`} />
+                        <span>{isDownloading ? "Updating..." : "1-Click Portable (.exe)"}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDownloadAndInstall("setup")}
+                        disabled={isDownloading}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 disabled:opacity-50 text-zinc-200 hover:text-white font-semibold text-xs rounded-lg border border-zinc-700 transition-all"
+                        title="Run Setup Installer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#F36F21]" />
+                        <span>Setup Installer</span>
+                      </button>
+                    </div>
 
                     <button
                       onClick={handleOpenReleasePage}
-                      className="w-full py-1.5 text-zinc-400 hover:text-zinc-200 text-[10px] flex items-center justify-center gap-1 hover:underline"
+                      className="w-full py-1 text-zinc-400 hover:text-zinc-200 text-[10px] flex items-center justify-center gap-1 hover:underline"
                     >
-                      <span>Or download Portable (.exe) via Browser</span>
+                      <span>Open GitHub Release Page in Browser</span>
                       <ExternalLink className="w-3 h-3" />
                     </button>
                   </div>
