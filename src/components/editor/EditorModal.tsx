@@ -172,7 +172,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   onUpdateRecord,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolType | "eyedropper">("select");
-  const [currentColor, setCurrentColor] = useState<string>("#FFDE2A");
+  const [currentColor, setCurrentColor] = useState<string>("#EF4444");
   const [currentStrokeWidth, setCurrentStrokeWidth] = useState<number>(4);
   const [fillShape, setFillShape] = useState<boolean>(false);
   const [stepCounter, setStepCounter] = useState<number>(1);
@@ -180,6 +180,17 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   // Zoom & Viewport state
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [showBottomDock, setShowBottomDock] = useState<boolean>(true);
+
+  // Drag & drop merge state for bottom thumbnails
+  const [draggingRecord, setDraggingRecord] = useState<{
+    item: CaptureRecord;
+    thumbSrc?: string;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    isDragging: boolean;
+  } | null>(null);
 
   // Canvas size state (can be expanded to arrange/merge multiple images side-by-side)
   const [canvasDim, setCanvasDim] = useState<{ width: number; height: number }>({ width: 800, height: 600 });
@@ -675,6 +686,57 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       setActiveTool("select");
     };
   }, [objects, canvasDim, pushState]);
+
+  // Global Pointer Drag & Drop for Bottom Dock Thumbnails (100% Reliable across WebViews)
+  useEffect(() => {
+    if (!draggingRecord) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const dist = Math.hypot(e.clientX - draggingRecord.startX, e.clientY - draggingRecord.startY);
+      setDraggingRecord((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          currentX: e.clientX,
+          currentY: e.clientY,
+          isDragging: prev.isDragging || dist > 6,
+        };
+      });
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (draggingRecord.isDragging) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          if (
+            e.clientX >= rect.left &&
+            e.clientX <= rect.right &&
+            e.clientY >= rect.top &&
+            e.clientY <= rect.bottom
+          ) {
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const dropX = Math.round((e.clientX - rect.left) * scaleX);
+            const dropY = Math.round((e.clientY - rect.top) * scaleY);
+            insertImageOverlay(draggingRecord.item.originalPath, dropX, dropY);
+          }
+        }
+      } else {
+        if (onSelectRecord) {
+          onSelectRecord(draggingRecord.item);
+        }
+      }
+      setDraggingRecord(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggingRecord, insertImageOverlay, onSelectRecord]);
 
   // Global Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+C, Ctrl+V, Delete)
   useEffect(() => {
@@ -2399,7 +2461,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   ? cursorStyle
                   : "crosshair",
               }}
-              className="shadow-2xl border border-zinc-800/80 rounded-lg max-w-none"
+              className={`shadow-2xl border border-zinc-800/80 rounded-lg max-w-none transition-all ${
+                draggingRecord?.isDragging
+                  ? "ring-4 ring-sky-400 ring-offset-4 ring-offset-zinc-950 scale-[1.005]"
+                  : ""
+              }`}
             />
 
             {/* Direct In-Place Inline Text Box Editor on Canvas */}
@@ -2716,11 +2782,51 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   key={item.id}
                   item={item}
                   isActive={item.id === record.id}
-                  onClick={() => onSelectRecord(item)}
+                  onStartDrag={(rec, thumb, e) => {
+                    setDraggingRecord({
+                      item: rec,
+                      thumbSrc: thumb,
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      currentX: e.clientX,
+                      currentY: e.clientY,
+                      isDragging: false,
+                    });
+                  }}
                 />
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Floating Drag Ghost for Drag-and-Drop Image Merging */}
+      {draggingRecord && draggingRecord.isDragging && (
+        <div
+          className="fixed z-[99999] pointer-events-none -translate-x-1/2 -translate-y-1/2 rounded-xl overflow-hidden shadow-2xl border-2 border-sky-400 ring-4 ring-sky-500/40 bg-zinc-900/95 backdrop-blur-md"
+          style={{
+            left: `${draggingRecord.currentX}px`,
+            top: `${draggingRecord.currentY}px`,
+            width: "140px",
+            height: "90px",
+          }}
+        >
+          {draggingRecord.thumbSrc ? (
+            <img
+              src={draggingRecord.thumbSrc}
+              alt="Drag preview"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-400">
+              {draggingRecord.item.width}x{draggingRecord.item.height}
+            </div>
+          )}
+          <div className="absolute inset-0 bg-sky-500/20 flex items-center justify-center p-1">
+            <span className="text-[10px] font-bold bg-black/85 text-sky-300 px-2 py-0.5 rounded-full shadow border border-sky-400/40">
+              Thả vào đây để ghép
+            </span>
+          </div>
         </div>
       )}
     </div>
@@ -2731,8 +2837,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 const BottomThumbnailCard: React.FC<{
   item: CaptureRecord;
   isActive: boolean;
-  onClick: () => void;
-}> = ({ item, isActive, onClick }) => {
+  onStartDrag: (item: CaptureRecord, thumbSrc: string, e: React.PointerEvent) => void;
+}> = ({ item, isActive, onStartDrag }) => {
   const [thumbSrc, setThumbSrc] = useState<string>("");
 
   useEffect(() => {
@@ -2765,25 +2871,24 @@ const BottomThumbnailCard: React.FC<{
 
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", item.originalPath);
-        e.dataTransfer.setData("application/json", JSON.stringify(item));
-        e.dataTransfer.effectAllowed = "copy";
+      onPointerDown={(e) => {
+        if (e.button === 0) {
+          onStartDrag(item, thumbSrc, e);
+        }
       }}
-      onClick={onClick}
-      className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing transition-all select-none ${
+      className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing transition-all select-none touch-none ${
         isActive
           ? "border-sky-400 ring-2 ring-sky-500/40 scale-105 shadow-md shadow-sky-500/20"
           : "border-zinc-800 hover:border-zinc-500 opacity-80 hover:opacity-100 hover:scale-[1.02]"
       }`}
-      title="Click để chỉnh sửa • Kéo & Thả vào vùng vẽ để ghép ảnh"
+      title="Click để chuyển ảnh • Kéo thả vào giữa vùng vẽ để ghép ảnh"
     >
       {thumbSrc ? (
         <img
           src={thumbSrc}
           alt="Thumbnail"
-          className="w-full h-full object-cover pointer-events-none"
+          draggable={false}
+          className="w-full h-full object-cover pointer-events-none select-none"
         />
       ) : (
         <div className="w-full h-full bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-600">
@@ -2794,6 +2899,8 @@ const BottomThumbnailCard: React.FC<{
       {/* Delete Button in top right on hover */}
       <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={handleDeleteItem}
           className="p-1 rounded bg-black/75 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow-md backdrop-blur-sm"
           title="Xóa ảnh chụp này"
@@ -2804,7 +2911,7 @@ const BottomThumbnailCard: React.FC<{
 
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-1.5 py-0.5 text-[9px] text-zinc-300 font-mono flex items-center justify-between pointer-events-none">
         <span>{item.width}x{item.height}</span>
-        <span className="text-[8px] text-zinc-400 font-sans">Kéo để ghép</span>
+        <span className="text-[8px] text-sky-400 font-sans font-medium">Kéo để ghép</span>
       </div>
     </div>
   );
