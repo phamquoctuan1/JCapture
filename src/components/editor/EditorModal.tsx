@@ -26,7 +26,6 @@ import {
   Layers,
   ChevronUp,
   ChevronDown,
-  PlusCircle,
   RefreshCw,
   Maximize2,
   Columns,
@@ -2696,8 +2695,8 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-400">
               <Layers className="w-3.5 h-3.5 text-sky-400" />
               <span>Recent Captures ({captures.length})</span>
-              <span className="text-[10px] text-zinc-500 font-normal">
-                (Click <b>+ Merge</b> to insert onto canvas • Drag corners with handles to <b>Resize</b>)
+              <span className="text-[10px] text-zinc-400 font-normal">
+                (Kéo thả ảnh vào vùng vẽ để ghép • Click để chuyển ảnh)
               </span>
             </div>
 
@@ -2718,7 +2717,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   item={item}
                   isActive={item.id === record.id}
                   onClick={() => onSelectRecord(item)}
-                  onInsertMerge={() => insertImageOverlay(item.originalPath)}
                 />
               ))}
             </div>
@@ -2729,13 +2727,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   );
 };
 
-// Bottom Miniature Card (Draggable for Merging, 1-Click + Merge Button & Quick Delete)
+// Bottom Miniature Card (Draggable for Merging & Quick Delete)
 const BottomThumbnailCard: React.FC<{
   item: CaptureRecord;
   isActive: boolean;
   onClick: () => void;
-  onInsertMerge: () => void;
-}> = ({ item, isActive, onClick, onInsertMerge }) => {
+}> = ({ item, isActive, onClick }) => {
   const [thumbSrc, setThumbSrc] = useState<string>("");
 
   useEffect(() => {
@@ -2775,12 +2772,12 @@ const BottomThumbnailCard: React.FC<{
         e.dataTransfer.effectAllowed = "copy";
       }}
       onClick={onClick}
-      className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-pointer transition-all ${
+      className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing transition-all select-none ${
         isActive
           ? "border-sky-400 ring-2 ring-sky-500/40 scale-105 shadow-md shadow-sky-500/20"
-          : "border-zinc-800 hover:border-zinc-600 opacity-75 hover:opacity-100"
+          : "border-zinc-800 hover:border-zinc-500 opacity-80 hover:opacity-100 hover:scale-[1.02]"
       }`}
-      title="Click to edit • Drag or click '+ Merge' to combine onto current canvas"
+      title="Click để chỉnh sửa • Kéo & Thả vào vùng vẽ để ghép ảnh"
     >
       {thumbSrc ? (
         <img
@@ -2794,31 +2791,20 @@ const BottomThumbnailCard: React.FC<{
         </div>
       )}
 
-      {/* Hover Action Overlay: Compact + Merge Button & Delete Button */}
-      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onInsertMerge();
-          }}
-          className="px-1.5 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-[9px] font-semibold flex items-center gap-0.5 shadow-md transform hover:scale-105 transition-all"
-          title="Insert and Merge this image onto active canvas"
-        >
-          <PlusCircle className="w-2.5 h-2.5" />
-          <span>Merge</span>
-        </button>
-
+      {/* Delete Button in top right on hover */}
+      <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleDeleteItem}
-          className="p-1 rounded bg-zinc-800/90 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow"
-          title="Delete this capture"
+          className="p-1 rounded bg-black/75 hover:bg-red-600 text-zinc-300 hover:text-white transition-all shadow-md backdrop-blur-sm"
+          title="Xóa ảnh chụp này"
         >
           <Trash2 className="w-3 h-3" />
         </button>
       </div>
 
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-zinc-300 font-mono flex items-center justify-between pointer-events-none">
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-1.5 py-0.5 text-[9px] text-zinc-300 font-mono flex items-center justify-between pointer-events-none">
         <span>{item.width}x{item.height}</span>
+        <span className="text-[8px] text-zinc-400 font-sans">Kéo để ghép</span>
       </div>
     </div>
   );
