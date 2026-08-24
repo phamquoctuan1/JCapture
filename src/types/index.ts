@@ -93,9 +93,14 @@ export interface TextObject {
   text: string;
   fontSize: number;
   color: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
   bgColor?: string;
+  hasBg?: boolean;
   borderColor?: string;
   borderWidth?: number;
+  hasBorder?: boolean;
 }
 
 export interface ImageOverlayObject {

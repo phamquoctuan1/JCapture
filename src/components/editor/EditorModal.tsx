@@ -32,6 +32,10 @@ import {
   Columns,
   Rows,
   Grid2X2,
+  Scissors,
+  Bold,
+  Italic,
+  Underline,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -207,23 +211,38 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     height: number;
     text: string;
     fontSize: number;
+    textColor: string;
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
     hasBorder: boolean;
+    borderColor: string;
+    borderWidth: number;
     hasBg: boolean;
+    bgColor: string;
   }>({
     visible: false,
     editingId: null,
     x: 0,
     y: 0,
-    width: 220,
+    width: 240,
     height: 80,
     text: "",
     fontSize: 22,
+    textColor: "#EF4444",
+    bold: false,
+    italic: false,
+    underline: false,
     hasBorder: true,
+    borderColor: "#EF4444",
+    borderWidth: 2,
     hasBg: true,
+    bgColor: "#FFFFFF",
   });
 
   // Crop mode state
   const [isCropMode, setIsCropMode] = useState(false);
+  const [isCropOutMode, setIsCropOutMode] = useState(false);
   const [cropRect, setCropRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [isCropped, setIsCropped] = useState(false);
 
@@ -705,6 +724,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         else if (isCropMode) {
           setIsCropMode(false);
           setCropRect(null);
+        } else if (isCropOutMode) {
+          setIsCropOutMode(false);
+          setCropRect(null);
         } else if (activeTool === "eyedropper") {
           setActiveTool("select");
         }
@@ -740,6 +762,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   }, [
     selectedId,
     isCropMode,
+    isCropOutMode,
     textBoxEditor.visible,
     activeTool,
     objects,
@@ -780,18 +803,21 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
 
     for (const obj of allObjects) {
+      if (textBoxEditor.visible && textBoxEditor.editingId === obj.id) {
+        continue;
+      }
       drawAnnotationObject(ctx, obj, bgImage);
     }
 
-    if (selectedId && !isCropMode) {
+    if (selectedId && !isCropMode && !isCropOutMode) {
       const selObj = objects.find((o) => o.id === selectedId);
-      if (selObj) {
+      if (selObj && (!textBoxEditor.visible || textBoxEditor.editingId !== selObj.id)) {
         drawSelectionBox(ctx, selObj);
       }
     }
 
-    if (isCropMode && cropRect && cropRect.w > 0 && cropRect.h > 0) {
-      drawCropOverlay(ctx, cropRect, canvas.width, canvas.height);
+    if ((isCropMode || isCropOutMode) && cropRect && cropRect.w > 0 && cropRect.h > 0) {
+      drawCropOverlay(ctx, cropRect, canvas.width, canvas.height, isCropOutMode);
     }
 
     // Draw Figma-Style Magnetic Alignment Guides
@@ -816,7 +842,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
       ctx.restore();
     }
-  }, [bgImage, canvasDim, objects, selectedId, isCropMode, cropRect, snapGuides]);
+  }, [bgImage, canvasDim, objects, selectedId, isCropMode, isCropOutMode, cropRect, snapGuides, textBoxEditor]);
 
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -887,7 +913,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return;
     }
 
-    if (isCropMode) {
+    if (isCropMode || isCropOutMode) {
       isDrawingRef.current = true;
       setCropRect({ x, y, w: 0, h: 0 });
       return;
@@ -1055,14 +1081,31 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       }
     }
 
-    if (isCropMode && isDrawingRef.current) {
+    if ((isCropMode || isCropOutMode) && isDrawingRef.current) {
       const start = startPosRef.current;
-      setCropRect({
+      const r = {
         x: Math.min(start.x, x),
         y: Math.min(start.y, y),
         w: Math.abs(x - start.x),
         h: Math.abs(y - start.y),
-      });
+      };
+      setCropRect(r);
+
+      const canvas = canvasRef.current;
+      if (canvas && bgImage) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#09090b";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(bgImage, 0, 0);
+          for (const obj of objects) {
+            drawAnnotationObject(ctx, obj, bgImage);
+          }
+          if (r.w > 0 && r.h > 0) {
+            drawCropOverlay(ctx, r, canvas.width, canvas.height, isCropOutMode);
+          }
+        }
+      }
       return;
     }
 
@@ -1189,7 +1232,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setSnapGuides({ xLines: [], yLines: [] });
 
-    if (isCropMode) {
+    if (isCropMode || isCropOutMode) {
       isDrawingRef.current = false;
       return;
     }
@@ -1231,8 +1274,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         height: boxH,
         text: "",
         fontSize: Math.max(18, currentStrokeWidth * 5),
+        textColor: currentColor,
+        bold: false,
+        italic: false,
+        underline: false,
         hasBorder: true,
+        borderColor: currentColor,
+        borderWidth: Math.max(2, currentStrokeWidth),
         hasBg: true,
+        bgColor: "#FFFFFF",
       });
       return;
     }
@@ -1269,12 +1319,19 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         editingId: textObj.id,
         x: textObj.x,
         y: textObj.y,
-        width: textObj.width || 220,
+        width: textObj.width || 240,
         height: textObj.height || 80,
         text: textObj.text,
         fontSize: textObj.fontSize || 22,
-        hasBorder: !!textObj.borderColor,
-        hasBg: !!textObj.bgColor,
+        textColor: textObj.color || "#EF4444",
+        bold: !!textObj.bold,
+        italic: !!textObj.italic,
+        underline: !!textObj.underline,
+        hasBorder: textObj.hasBorder !== undefined ? textObj.hasBorder : !!textObj.borderColor,
+        borderColor: textObj.borderColor || textObj.color || "#EF4444",
+        borderWidth: textObj.borderWidth || 2,
+        hasBg: textObj.hasBg !== undefined ? textObj.hasBg : !!textObj.bgColor,
+        bgColor: textObj.bgColor || "#FFFFFF",
       });
       setSelectedId(textObj.id);
     }
@@ -1299,10 +1356,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       height: textBoxEditor.height,
       text: textBoxEditor.text,
       fontSize: textBoxEditor.fontSize,
-      color: currentColor,
-      bgColor: textBoxEditor.hasBg ? "rgba(255, 255, 255, 0.96)" : undefined,
-      borderColor: textBoxEditor.hasBorder ? currentColor : undefined,
-      borderWidth: textBoxEditor.hasBorder ? currentStrokeWidth : undefined,
+      color: textBoxEditor.textColor,
+      bold: textBoxEditor.bold,
+      italic: textBoxEditor.italic,
+      underline: textBoxEditor.underline,
+      hasBg: textBoxEditor.hasBg,
+      bgColor: textBoxEditor.hasBg ? textBoxEditor.bgColor : undefined,
+      hasBorder: textBoxEditor.hasBorder,
+      borderColor: textBoxEditor.hasBorder ? textBoxEditor.borderColor : undefined,
+      borderWidth: textBoxEditor.hasBorder ? textBoxEditor.borderWidth : undefined,
     };
 
     if (textBoxEditor.editingId) {
@@ -1318,7 +1380,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   // Crop Action: Overwrites disk file and database record permanently
   const handleApplyCrop = async () => {
-    if (!cropRect || cropRect.w < 20 || cropRect.h < 20 || !bgImage) return;
+    if (!cropRect || cropRect.w < 10 || cropRect.h < 10 || !bgImage) return;
 
     const cropCanvas = document.createElement("canvas");
     const cropW = Math.round(cropRect.w);
@@ -1377,18 +1439,179 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     };
   };
 
+  // Crop Out Action: Cuts out the selected area and joins the remaining image pieces or erases area
+  const handleApplyCropOut = async (mode: "strip-vertical" | "strip-horizontal" | "erase") => {
+    if (!cropRect || cropRect.w < 5 || cropRect.h < 5 || !bgImage) return;
+
+    const cutX = Math.round(cropRect.x);
+    const cutY = Math.round(cropRect.y);
+    const cutW = Math.round(cropRect.w);
+    const cutH = Math.round(cropRect.h);
+    const curW = canvasDim.width;
+    const curH = canvasDim.height;
+
+    const outCanvas = document.createElement("canvas");
+    let newW = curW;
+    let newH = curH;
+
+    if (mode === "strip-vertical") {
+      // Cut out horizontal strip from cutY to cutY + cutH, collapse top and bottom
+      newH = Math.max(20, curH - cutH);
+      outCanvas.width = newW;
+      outCanvas.height = newH;
+      const ctx = outCanvas.getContext("2d");
+      if (!ctx) return;
+
+      // Top piece: from 0 to cutY
+      if (cutY > 0) {
+        ctx.drawImage(bgImage, 0, 0, curW, cutY, 0, 0, curW, cutY);
+      }
+      // Bottom piece: from cutY + cutH to curH -> placed at cutY
+      const bottomH = curH - (cutY + cutH);
+      if (bottomH > 0) {
+        ctx.drawImage(bgImage, 0, cutY + cutH, curW, bottomH, 0, cutY, curW, bottomH);
+      }
+    } else if (mode === "strip-horizontal") {
+      // Cut out vertical strip from cutX to cutX + cutW, collapse left and right
+      newW = Math.max(20, curW - cutW);
+      outCanvas.width = newW;
+      outCanvas.height = newH;
+      const ctx = outCanvas.getContext("2d");
+      if (!ctx) return;
+
+      // Left piece: from 0 to cutX
+      if (cutX > 0) {
+        ctx.drawImage(bgImage, 0, 0, cutX, curH, 0, 0, cutX, curH);
+      }
+      // Right piece: from cutX + cutW to curW -> placed at cutX
+      const rightW = curW - (cutX + cutW);
+      if (rightW > 0) {
+        ctx.drawImage(bgImage, cutX + cutW, 0, rightW, curH, cutX, 0, rightW, curH);
+      }
+    } else {
+      // Erase Area
+      outCanvas.width = newW;
+      outCanvas.height = newH;
+      const ctx = outCanvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(bgImage, 0, 0, curW, curH);
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(cutX, cutY, cutW, cutH);
+    }
+
+    const outDataUrl = outCanvas.toDataURL("image/png");
+    const outImg = new Image();
+    outImg.src = outDataUrl;
+    outImg.onload = async () => {
+      setBgImage(outImg);
+      currentBgSrcRef.current = outDataUrl;
+      originalDataUrlRef.current = outDataUrl;
+      setIsCropped(false);
+
+      const newDim = { width: newW, height: newH };
+      setCanvasDim(newDim);
+
+      // Adjust annotations for collapsed strips
+      let shiftedObjects = objects;
+      if (mode === "strip-vertical") {
+        shiftedObjects = objects
+          .map((obj) => {
+            const topY = "y" in obj ? (obj as any).y : "startY" in obj ? Math.min((obj as any).startY, (obj as any).endY) : 0;
+            if (topY >= cutY + cutH) {
+              return moveObjectFromOrigin(obj, 0, -cutH);
+            }
+            return obj;
+          })
+          .filter((obj) => isObjectInsideBounds(obj, newW, newH));
+      } else if (mode === "strip-horizontal") {
+        shiftedObjects = objects
+          .map((obj) => {
+            const leftX = "x" in obj ? (obj as any).x : "startX" in obj ? Math.min((obj as any).startX, (obj as any).endX) : 0;
+            if (leftX >= cutX + cutW) {
+              return moveObjectFromOrigin(obj, -cutW, 0);
+            }
+            return obj;
+          })
+          .filter((obj) => isObjectInsideBounds(obj, newW, newH));
+      }
+
+      pushState(shiftedObjects, outDataUrl, newDim);
+      setIsCropMode(false);
+      setCropRect(null);
+
+      // Overwrite file on disk and in database
+      try {
+        const updatedRecord = await invoke<CaptureRecord>("overwrite_capture_image", {
+          id: record.id,
+          base64Data: outDataUrl,
+          width: newW,
+          height: newH,
+        });
+        if (updatedRecord) {
+          onUpdateRecord(updatedRecord);
+        }
+      } catch (err) {
+        console.error("Failed to overwrite cropped capture on disk:", err);
+      }
+    };
+  };
+
   const handleUpdateSelectedColor = (newColor: string) => {
     setCurrentColor(newColor);
     if (selectedId) {
       const updated = objects.map((obj) => {
         if (obj.id !== selectedId) return obj;
+        if (obj.type === "text") {
+          return { ...obj, color: newColor };
+        }
         if ("color" in obj) {
-          return { ...obj, color: newColor, borderColor: "borderColor" in obj ? newColor : undefined };
+          return { ...obj, color: newColor };
         }
         return obj;
       });
       pushState(updated);
     }
+  };
+
+  const handleToggleSelectedTextProp = (prop: "bold" | "italic" | "underline" | "hasBorder" | "hasBg") => {
+    if (!selectedId) return;
+    const updated = objects.map((obj) => {
+      if (obj.id !== selectedId || obj.type !== "text") return obj;
+      if (prop === "hasBorder") {
+        const nextVal = obj.hasBorder !== false && !!obj.borderColor ? false : true;
+        return {
+          ...obj,
+          hasBorder: nextVal,
+          borderColor: nextVal ? obj.borderColor || obj.color || "#EF4444" : undefined,
+          borderWidth: nextVal ? obj.borderWidth || 2 : undefined,
+        };
+      }
+      if (prop === "hasBg") {
+        const nextVal = obj.hasBg !== false && !!obj.bgColor ? false : true;
+        return {
+          ...obj,
+          hasBg: nextVal,
+          bgColor: nextVal ? obj.bgColor || "#FFFFFF" : undefined,
+        };
+      }
+      return {
+        ...obj,
+        [prop]: !obj[prop],
+      };
+    });
+    pushState(updated);
+  };
+
+  const handleUpdateSelectedTextProp = (prop: string, val: any) => {
+    if (!selectedId) return;
+    const updated = objects.map((obj) => {
+      if (obj.id !== selectedId || obj.type !== "text") return obj;
+      return {
+        ...obj,
+        [prop]: val,
+      };
+    });
+    pushState(updated);
   };
 
   const handleUpdateSelectedStroke = (newWidth: number) => {
@@ -1462,91 +1685,101 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         {/* Left: Tools Group */}
         <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
           <ToolButton
-            active={activeTool === "select" && !isCropMode}
+            active={activeTool === "select" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("select");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<MousePointer className="w-4 h-4" />}
             label="Select, Move & Resize with Handles (V)"
           />
           <ToolButton
-            active={activeTool === "pen" && !isCropMode}
+            active={activeTool === "pen" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("pen");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Pencil className="w-4 h-4" />}
             label="Freehand Pen / Doodle"
           />
           <ToolButton
-            active={activeTool === "arrow" && !isCropMode}
+            active={activeTool === "arrow" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("arrow");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<ArrowRight className="w-4 h-4 -rotate-45" />}
             label="Arrow (A)"
           />
           <ToolButton
-            active={activeTool === "rect" && !isCropMode}
+            active={activeTool === "rect" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("rect");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Square className="w-4 h-4" />}
             label="Rectangle (R)"
           />
           <ToolButton
-            active={activeTool === "ellipse" && !isCropMode}
+            active={activeTool === "ellipse" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("ellipse");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Circle className="w-4 h-4" />}
             label="Ellipse (O)"
           />
           <ToolButton
-            active={activeTool === "line" && !isCropMode}
+            active={activeTool === "line" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("line");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Minus className="w-4 h-4" />}
             label="Line (L)"
           />
           <ToolButton
-            active={activeTool === "text" && !isCropMode}
+            active={activeTool === "text" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("text");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Type className="w-4 h-4" />}
             label="Text Box (Drag box with border color)"
           />
           <ToolButton
-            active={activeTool === "highlight" && !isCropMode}
+            active={activeTool === "highlight" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("highlight");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<Highlighter className="w-4 h-4" />}
             label="Highlighter"
           />
           <ToolButton
-            active={activeTool === "blur" && !isCropMode}
+            active={activeTool === "blur" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("blur");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<EyeOff className="w-4 h-4" />}
             label="Blur / Obfuscate"
           />
           <ToolButton
-            active={activeTool === "step" && !isCropMode}
+            active={activeTool === "step" && !isCropMode && !isCropOutMode}
             onClick={() => {
               setActiveTool("step");
               setIsCropMode(false);
+              setIsCropOutMode(false);
             }}
             icon={<ListOrdered className="w-4 h-4" />}
             label="Step Number Badge (①②③)"
@@ -1555,10 +1788,21 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             active={isCropMode}
             onClick={() => {
               setIsCropMode(!isCropMode);
+              setIsCropOutMode(false);
               setSelectedId(null);
             }}
             icon={<Crop className="w-4 h-4 text-emerald-400" />}
-            label="Crop Image"
+            label="Crop Image (Keep Area)"
+          />
+          <ToolButton
+            active={isCropOutMode}
+            onClick={() => {
+              setIsCropOutMode(!isCropOutMode);
+              setIsCropMode(false);
+              setSelectedId(null);
+            }}
+            icon={<Scissors className="w-4 h-4 text-amber-400" />}
+            label="Crop Out / Cutout (Cut strip & join image)"
           />
 
           {/* Revert crop button */}
@@ -1674,76 +1918,284 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
         {/* Center: Style Options (Color Palette & Eyedropper & Stroke & Fill) */}
         <div className="flex items-center gap-1.5">
-          {/* Color Palette + Eyedropper */}
-          <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                onClick={() => handleUpdateSelectedColor(c)}
-                className={`w-3.5 h-3.5 rounded-full transition-transform ${
-                  currentColor.toUpperCase() === c.toUpperCase()
-                    ? "scale-125 ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-900 shadow-sm"
-                    : "hover:scale-110 opacity-85 hover:opacity-100"
-                }`}
-                style={{ backgroundColor: c }}
-                title={c}
-              />
-            ))}
+          {(() => {
+            const selObj = objects.find((o) => o.id === selectedId);
+            if (selObj && selObj.type === "text") {
+              const textObj = selObj as TextObject;
+              return (
+                <div className="flex flex-wrap items-center gap-1.5 bg-zinc-900/90 border border-sky-500/40 p-1 rounded-xl shadow-lg animate-in fade-in">
+                  {/* Font Size */}
+                  <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
+                    {[14, 18, 24, 32, 42].map((sz) => (
+                      <button
+                        key={sz}
+                        type="button"
+                        onClick={() => handleUpdateSelectedTextProp("fontSize", sz)}
+                        className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+                          (textObj.fontSize || 22) === sz
+                            ? "bg-amber-500 text-black font-bold"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        {sz}
+                      </button>
+                    ))}
+                  </div>
 
-            {/* Custom Color Picker Input */}
-            <div className="relative flex items-center justify-center w-3.5 h-3.5 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Custom Color Picker">
-              <input
-                type="color"
-                value={currentColor}
-                onChange={(e) => handleUpdateSelectedColor(e.target.value)}
-                className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
-              />
-              <div className="w-full h-full" style={{ backgroundColor: currentColor }} />
-            </div>
+                  {/* Bold, Italic, Underline */}
+                  <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSelectedTextProp("bold")}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textObj.bold ? "bg-sky-600 text-white font-bold" : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Bold (Ctrl+B)"
+                    >
+                      <Bold className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSelectedTextProp("italic")}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textObj.italic ? "bg-sky-600 text-white font-bold" : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Italic (Ctrl+I)"
+                    >
+                      <Italic className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSelectedTextProp("underline")}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textObj.underline ? "bg-sky-600 text-white font-bold" : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Underline (Ctrl+U)"
+                    >
+                      <Underline className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
 
-            {/* Eyedropper Tool */}
-            <button
-              onClick={handleTriggerEyedropper}
-              className={`p-0.5 rounded transition-colors ${
-                activeTool === "eyedropper"
-                  ? "bg-amber-500 text-black"
-                  : "text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
-              }`}
-              title="Eyedropper / Bút chọn màu (Click to pick color)"
-            >
-              <Pipette className="w-3.5 h-3.5" />
-            </button>
-          </div>
+                  {/* Text Font Color (T) */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800" title="Text Font Color">
+                    <span className="text-[10px] font-bold text-zinc-400 px-0.5">T</span>
+                    {["#FFFFFF", "#000000", "#EF4444", "#3B82F6", "#22C55E", "#FFDE2A"].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => handleUpdateSelectedTextProp("color", c)}
+                        className={`w-3.5 h-3.5 rounded-full transition-transform ${
+                          (textObj.color || "").toUpperCase() === c.toUpperCase()
+                            ? "scale-125 ring-2 ring-sky-400"
+                            : "hover:scale-110 opacity-80 hover:opacity-100"
+                        }`}
+                        style={{ backgroundColor: c, border: c === "#000000" ? "1px solid #444" : "none" }}
+                      />
+                    ))}
+                    <div className="relative flex items-center justify-center w-3.5 h-3.5 rounded-full overflow-hidden border border-zinc-700 cursor-pointer">
+                      <input
+                        type="color"
+                        value={textObj.color || "#EF4444"}
+                        onChange={(e) => handleUpdateSelectedTextProp("color", e.target.value)}
+                        className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
+                      />
+                      <div className="w-full h-full" style={{ backgroundColor: textObj.color || "#EF4444" }} />
+                    </div>
+                  </div>
 
-          {/* Stroke Width */}
-          <div className="flex items-center gap-0.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
-            {STROKE_WIDTHS.map((w) => (
-              <button
-                key={w}
-                onClick={() => handleUpdateSelectedStroke(w)}
-                className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
-                  currentStrokeWidth === w
-                    ? "bg-sky-600 text-white font-bold"
-                    : "text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                {w}p
-              </button>
-            ))}
-          </div>
+                  {/* Independent Border Controls */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSelectedTextProp("hasBorder")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        textObj.hasBorder !== false && textObj.borderColor
+                          ? "bg-amber-600/30 text-amber-300 font-bold border border-amber-500/40"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Border: {textObj.hasBorder !== false && textObj.borderColor ? "ON" : "OFF"}
+                    </button>
+                    {textObj.hasBorder !== false && textObj.borderColor && (
+                      <div className="flex items-center gap-1 pl-0.5 border-l border-zinc-800">
+                        {["#EF4444", "#3B82F6", "#000000", "#FFFFFF", "#FFDE2A"].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => handleUpdateSelectedTextProp("borderColor", c)}
+                            className={`w-2.5 h-2.5 rounded-full transition-transform ${
+                              (textObj.borderColor || "").toUpperCase() === c.toUpperCase()
+                                ? "scale-125 ring-1.5 ring-amber-400"
+                                : "opacity-75 hover:opacity-100"
+                            }`}
+                            style={{ backgroundColor: c }}
+                            title={`Border: ${c}`}
+                          />
+                        ))}
+                        {[1, 2, 4].map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => handleUpdateSelectedTextProp("borderWidth", w)}
+                            className={`px-1 py-0.2 text-[9px] font-mono rounded ${
+                              (textObj.borderWidth || 2) === w
+                                ? "bg-amber-500 text-black font-bold"
+                                : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            {w}px
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-          {/* Fill shape toggle */}
-          <button
-            onClick={() => setFillShape(!fillShape)}
-            className={`px-1.5 py-1 text-[10px] font-medium rounded-lg border transition-all ${
-              fillShape
-                ? "bg-sky-600/30 text-sky-300 border-sky-500/50 font-bold"
-                : "bg-zinc-950/60 text-zinc-400 border-zinc-800 hover:text-zinc-200"
-            }`}
-            title="Toggle Semi-transparent Fill for Shapes"
-          >
-            {fillShape ? "Fill" : "Outline"}
-          </button>
+                  {/* Independent Background Fill Controls */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSelectedTextProp("hasBg")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        textObj.hasBg !== false && textObj.bgColor
+                          ? "bg-sky-600/30 text-sky-300 font-bold border border-sky-500/40"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Fill: {textObj.hasBg !== false && textObj.bgColor ? "ON" : "OFF"}
+                    </button>
+                    {textObj.hasBg !== false && textObj.bgColor && (
+                      <div className="flex items-center gap-1 pl-0.5 border-l border-zinc-800">
+                        {[
+                          { name: "White", val: "#FFFFFF" },
+                          { name: "Dark", val: "#0F172A" },
+                          { name: "Note", val: "#FEF08A" },
+                          { name: "Cyan", val: "#CFFAFE" },
+                        ].map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => handleUpdateSelectedTextProp("bgColor", item.val)}
+                            className={`w-2.5 h-2.5 rounded-full transition-transform ${
+                              (textObj.bgColor || "").toUpperCase() === item.val.toUpperCase()
+                                ? "scale-125 ring-1.5 ring-sky-400"
+                                : "opacity-75 hover:opacity-100"
+                            }`}
+                            style={{ backgroundColor: item.val, border: "1px solid #444" }}
+                            title={`Fill: ${item.name}`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Edit Text Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTextBoxEditor({
+                        visible: true,
+                        editingId: textObj.id,
+                        x: textObj.x,
+                        y: textObj.y,
+                        width: textObj.width || 240,
+                        height: textObj.height || 80,
+                        text: textObj.text,
+                        fontSize: textObj.fontSize || 22,
+                        textColor: textObj.color || "#EF4444",
+                        bold: !!textObj.bold,
+                        italic: !!textObj.italic,
+                        underline: !!textObj.underline,
+                        hasBorder: textObj.hasBorder !== false && !!textObj.borderColor,
+                        borderColor: textObj.borderColor || textObj.color || "#EF4444",
+                        borderWidth: textObj.borderWidth || 2,
+                        hasBg: textObj.hasBg !== false && !!textObj.bgColor,
+                        bgColor: textObj.bgColor || "#FFFFFF",
+                      });
+                    }}
+                    className="px-2 py-0.5 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all"
+                  >
+                    <Type className="w-3.5 h-3.5" />
+                    <span>Edit Text</span>
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <>
+                {/* Color Palette + Eyedropper */}
+                <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+                  {COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => handleUpdateSelectedColor(c)}
+                      className={`w-3.5 h-3.5 rounded-full transition-transform ${
+                        currentColor.toUpperCase() === c.toUpperCase()
+                          ? "scale-125 ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-900 shadow-sm"
+                          : "hover:scale-110 opacity-85 hover:opacity-100"
+                      }`}
+                      style={{ backgroundColor: c }}
+                      title={c}
+                    />
+                  ))}
+
+                  {/* Custom Color Picker Input */}
+                  <div className="relative flex items-center justify-center w-3.5 h-3.5 rounded-full overflow-hidden border border-zinc-700 cursor-pointer" title="Custom Color Picker">
+                    <input
+                      type="color"
+                      value={currentColor}
+                      onChange={(e) => handleUpdateSelectedColor(e.target.value)}
+                      className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
+                    />
+                    <div className="w-full h-full" style={{ backgroundColor: currentColor }} />
+                  </div>
+
+                  {/* Eyedropper Tool */}
+                  <button
+                    onClick={handleTriggerEyedropper}
+                    className={`p-0.5 rounded transition-colors ${
+                      activeTool === "eyedropper"
+                        ? "bg-amber-500 text-black"
+                        : "text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
+                    }`}
+                    title="Eyedropper / Bút chọn màu (Click to pick color)"
+                  >
+                    <Pipette className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Stroke Width */}
+                <div className="flex items-center gap-0.5 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800">
+                  {STROKE_WIDTHS.map((w) => (
+                    <button
+                      key={w}
+                      onClick={() => handleUpdateSelectedStroke(w)}
+                      className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+                        currentStrokeWidth === w
+                          ? "bg-sky-600 text-white font-bold"
+                          : "text-zinc-400 hover:text-zinc-200"
+                      }`}
+                    >
+                      {w}p
+                    </button>
+                  ))}
+                </div>
+
+                {/* Fill shape toggle */}
+                <button
+                  onClick={() => setFillShape(!fillShape)}
+                  className={`px-1.5 py-1 text-[10px] font-medium rounded-lg border transition-all ${
+                    fillShape
+                      ? "bg-sky-600/30 text-sky-300 border-sky-500/50 font-bold"
+                      : "bg-zinc-950/60 text-zinc-400 border-zinc-800 hover:text-zinc-200"
+                  }`}
+                  title="Toggle Semi-transparent Fill for Shapes"
+                >
+                  {fillShape ? "Fill" : "Outline"}
+                </button>
+              </>
+            );
+          })()}
 
           <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
@@ -1828,112 +2280,85 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         onDrop={handleDropOnCanvas}
         className="flex-1 overflow-auto bg-zinc-950 flex items-center justify-center p-8 relative"
       >
-        {/* Floating Crop Actions Banner */}
+        {/* Floating Crop (Keep) Actions Banner */}
         {isCropMode && (
-          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-emerald-500/80 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
-            <span className="text-xs text-zinc-200 font-medium">
-              {cropRect && cropRect.w > 10 && cropRect.h > 10
-                ? `Crop Region: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
-                : "Drag a box on canvas to select crop region"}
+          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-emerald-500/80 px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 animate-in slide-in-from-top-2">
+            <span className="text-xs text-zinc-200 font-medium mr-1 flex items-center gap-1.5">
+              <Crop className="w-3.5 h-3.5 text-emerald-400" />
+              <span>
+                {cropRect && cropRect.w > 5 && cropRect.h > 5
+                  ? `Crop Area: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
+                  : "Drag on canvas to crop & keep selected area"}
+              </span>
             </span>
-            {cropRect && cropRect.w > 20 && cropRect.h > 20 && (
+            {cropRect && cropRect.w > 5 && cropRect.h > 5 && (
               <button
+                type="button"
                 onClick={handleApplyCrop}
-                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-lg shadow-emerald-600/30"
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-md shadow-emerald-600/30"
+                title="Keep selected area and crop out everything else"
               >
                 <Check className="w-3.5 h-3.5" />
                 <span>Apply Crop</span>
               </button>
             )}
             <button
+              type="button"
               onClick={() => {
                 setIsCropMode(false);
                 setCropRect(null);
               }}
-              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-all"
+              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-all ml-1"
             >
               Cancel (Esc)
             </button>
           </div>
         )}
 
-        {/* Text Box Modal Editor */}
-        {textBoxEditor.visible && (
-          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-amber-500/80 p-3 rounded-xl shadow-2xl flex flex-col gap-2 min-w-[340px] animate-in slide-in-from-top-2">
-            <div className="flex items-center justify-between text-xs text-zinc-300">
-              <span className="font-semibold flex items-center gap-1 text-amber-400">
-                <Type className="w-3.5 h-3.5" />
-                Text Box with Border
+        {/* Floating Crop Out (Cutout & Remove Strip) Actions Banner */}
+        {isCropOutMode && (
+          <div className="absolute top-6 z-30 bg-zinc-900/95 border border-amber-500/80 px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 animate-in slide-in-from-top-2">
+            <span className="text-xs text-zinc-200 font-medium mr-1 flex items-center gap-1.5">
+              <Scissors className="w-3.5 h-3.5 text-amber-400" />
+              <span>
+                {cropRect && cropRect.w > 5 && cropRect.h > 5
+                  ? `Cutout Strip: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
+                  : "Drag box over section to cut out & join image"}
               </span>
-              <div className="flex items-center gap-1">
+            </span>
+            {cropRect && cropRect.w > 5 && cropRect.h > 5 && (
+              <>
                 <button
-                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBorder: !prev.hasBorder }))}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
-                    textBoxEditor.hasBorder
-                      ? "bg-amber-600/30 text-amber-300 border-amber-500/40"
-                      : "bg-zinc-800 text-zinc-400 border-zinc-700"
-                  }`}
+                  type="button"
+                  onClick={() => handleApplyCropOut(cropRect.w >= cropRect.h ? "strip-vertical" : "strip-horizontal")}
+                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-md shadow-amber-600/30"
+                  title="Remove this strip and join remaining pieces together"
                 >
-                  {textBoxEditor.hasBorder ? "Border: ON" : "Border: OFF"}
+                  <Scissors className="w-3.5 h-3.5" />
+                  <span>Cut & Join</span>
                 </button>
-                <button
-                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBg: !prev.hasBg }))}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
-                    textBoxEditor.hasBg
-                      ? "bg-sky-600/30 text-sky-300 border-sky-500/40"
-                      : "bg-zinc-800 text-zinc-400 border-zinc-700"
-                  }`}
-                >
-                  {textBoxEditor.hasBg ? "Fill: ON" : "Fill: OFF"}
-                </button>
-              </div>
-            </div>
 
-            <textarea
-              autoFocus
-              rows={3}
-              value={textBoxEditor.text}
-              onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, text: e.target.value }))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleCommitTextBox();
-                if (e.key === "Escape") setTextBoxEditor((prev) => ({ ...prev, visible: false }));
+                <button
+                  type="button"
+                  onClick={() => handleApplyCropOut("erase")}
+                  className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-all flex items-center gap-1"
+                  title="Erase / clear content in selected area"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                  <span>Erase Area</span>
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setIsCropOutMode(false);
+                setCropRect(null);
               }}
-              placeholder="Type text in box (Ctrl+Enter to finish)..."
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-amber-500 resize-none font-medium"
-            />
-
-            <div className="flex items-center justify-between pt-1">
-              <div className="flex items-center gap-1">
-                {[16, 22, 28, 36].map((sz) => (
-                  <button
-                    key={sz}
-                    onClick={() => setTextBoxEditor((prev) => ({ ...prev, fontSize: sz }))}
-                    className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
-                      textBoxEditor.fontSize === sz
-                        ? "bg-amber-600 text-white font-bold"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {sz}px
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setTextBoxEditor((prev) => ({ ...prev, visible: false }))}
-                  className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCommitTextBox}
-                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-black text-xs font-bold rounded-md transition-colors shadow-md shadow-amber-600/20"
-                >
-                  Done (Ctrl+Enter)
-                </button>
-              </div>
-            </div>
+              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-all ml-1"
+            >
+              Cancel (Esc)
+            </button>
           </div>
         )}
 
@@ -1944,6 +2369,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           </div>
         ) : (
           <div
+            className="relative"
             style={{
               transform: `scale(${zoomLevel})`,
               transformOrigin: "center center",
@@ -1964,14 +2390,290 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               onDrop={handleDropOnCanvas}
               style={{
                 cursor:
-                  isCropMode || activeTool === "eyedropper"
-                    ? "crosshair"
-                    : activeTool === "select"
-                    ? cursorStyle
-                    : "crosshair",
+                isCropMode || activeTool === "eyedropper"
+                  ? "crosshair"
+                  : activeTool === "select"
+                  ? cursorStyle
+                  : "crosshair",
               }}
               className="shadow-2xl border border-zinc-800/80 rounded-lg max-w-none"
             />
+
+            {/* Direct In-Place Inline Text Box Editor on Canvas */}
+            {textBoxEditor.visible && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: textBoxEditor.x,
+                  top: textBoxEditor.y,
+                  width: Math.max(160, textBoxEditor.width),
+                  minHeight: Math.max(42, textBoxEditor.height),
+                  zIndex: 50,
+                }}
+                className="flex flex-col select-text pointer-events-auto"
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {/* Floating mini formatting bar above active text box */}
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: "calc(100% + 6px)",
+                    left: 0,
+                  }}
+                  className="flex flex-wrap items-center gap-1.5 bg-zinc-900/95 border border-zinc-700/80 p-1.5 rounded-xl shadow-2xl text-xs z-50 whitespace-nowrap backdrop-blur-md max-w-[540px]"
+                >
+                  {/* Font Size */}
+                  <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
+                    {[14, 18, 24, 32, 42].map((sz) => (
+                      <button
+                        key={sz}
+                        type="button"
+                        onClick={() => setTextBoxEditor((prev) => ({ ...prev, fontSize: sz }))}
+                        className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+                          textBoxEditor.fontSize === sz
+                            ? "bg-amber-500 text-black font-bold"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        {sz}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Rich Text Style (Bold, Italic, Underline) */}
+                  <div className="flex items-center gap-0.5 bg-zinc-950/70 p-0.5 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, bold: !prev.bold }))}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textBoxEditor.bold
+                          ? "bg-sky-600 text-white font-bold"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Bold (Ctrl+B)"
+                    >
+                      <Bold className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, italic: !prev.italic }))}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textBoxEditor.italic
+                          ? "bg-sky-600 text-white font-bold"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Italic (Ctrl+I)"
+                    >
+                      <Italic className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, underline: !prev.underline }))}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        textBoxEditor.underline
+                          ? "bg-sky-600 text-white font-bold"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      }`}
+                      title="Underline (Ctrl+U)"
+                    >
+                      <Underline className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Text Color Picker */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-1 rounded-lg border border-zinc-800" title="Text Font Color">
+                    <span className="text-[10px] font-bold text-zinc-400 px-0.5">T</span>
+                    {["#FFFFFF", "#000000", "#EF4444", "#3B82F6", "#22C55E", "#FFDE2A"].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setTextBoxEditor((prev) => ({ ...prev, textColor: c }))}
+                        className={`w-3 h-3 rounded-full transition-transform ${
+                          textBoxEditor.textColor.toUpperCase() === c.toUpperCase()
+                            ? "scale-125 ring-2 ring-sky-400"
+                            : "hover:scale-110 opacity-80 hover:opacity-100"
+                        }`}
+                        style={{ backgroundColor: c, border: c === "#000000" ? "1px solid #444" : "none" }}
+                      />
+                    ))}
+                    <div className="relative flex items-center justify-center w-3 h-3 rounded-full overflow-hidden border border-zinc-700 cursor-pointer">
+                      <input
+                        type="color"
+                        value={textBoxEditor.textColor}
+                        onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, textColor: e.target.value }))}
+                        className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
+                      />
+                      <div className="w-full h-full" style={{ backgroundColor: textBoxEditor.textColor }} />
+                    </div>
+                  </div>
+
+                  {/* Independent Border Controls */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBorder: !prev.hasBorder }))}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        textBoxEditor.hasBorder
+                          ? "bg-amber-600/30 text-amber-300 font-bold border border-amber-500/40"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Border: {textBoxEditor.hasBorder ? "ON" : "OFF"}
+                    </button>
+
+                    {textBoxEditor.hasBorder && (
+                      <div className="flex items-center gap-1 pl-0.5 border-l border-zinc-800">
+                        {["#EF4444", "#3B82F6", "#000000", "#FFFFFF", "#FFDE2A"].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setTextBoxEditor((prev) => ({ ...prev, borderColor: c }))}
+                            className={`w-2.5 h-2.5 rounded-full transition-transform ${
+                              textBoxEditor.borderColor.toUpperCase() === c.toUpperCase()
+                                ? "scale-125 ring-1.5 ring-amber-400"
+                                : "opacity-75 hover:opacity-100"
+                            }`}
+                            style={{ backgroundColor: c }}
+                            title={`Border: ${c}`}
+                          />
+                        ))}
+                        {[1, 2, 4].map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => setTextBoxEditor((prev) => ({ ...prev, borderWidth: w }))}
+                            className={`px-1 py-0.2 text-[9px] font-mono rounded ${
+                              textBoxEditor.borderWidth === w
+                                ? "bg-amber-500 text-black font-bold"
+                                : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            {w}px
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Independent Background Fill Controls */}
+                  <div className="flex items-center gap-1 bg-zinc-950/70 p-0.5 px-1 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, hasBg: !prev.hasBg }))}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        textBoxEditor.hasBg
+                          ? "bg-sky-600/30 text-sky-300 font-bold border border-sky-500/40"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Fill: {textBoxEditor.hasBg ? "ON" : "OFF"}
+                    </button>
+
+                    {textBoxEditor.hasBg && (
+                      <div className="flex items-center gap-1 pl-0.5 border-l border-zinc-800">
+                        {[
+                          { name: "White", val: "#FFFFFF" },
+                          { name: "Dark", val: "#0F172A" },
+                          { name: "Note", val: "#FEF08A" },
+                          { name: "Cyan", val: "#CFFAFE" },
+                        ].map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => setTextBoxEditor((prev) => ({ ...prev, bgColor: item.val }))}
+                            className={`w-2.5 h-2.5 rounded-full transition-transform ${
+                              textBoxEditor.bgColor.toUpperCase() === item.val.toUpperCase()
+                                ? "scale-125 ring-1.5 ring-sky-400"
+                                : "opacity-75 hover:opacity-100"
+                            }`}
+                            style={{ backgroundColor: item.val, border: "1px solid #444" }}
+                            title={`Fill: ${item.name}`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 ml-auto">
+                    <button
+                      type="button"
+                      onClick={handleCommitTextBox}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-lg flex items-center gap-1 shadow-md shadow-emerald-600/20"
+                    >
+                      <Check className="w-3 h-3" />
+                      <span>Done</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }))}
+                      className="p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
+                      title="Cancel (Esc)"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Direct In-Place Textarea */}
+                <textarea
+                  autoFocus
+                  value={textBoxEditor.text}
+                  onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, text: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.ctrlKey || e.metaKey) {
+                      if (e.key === "b" || e.key === "B") {
+                        e.preventDefault();
+                        setTextBoxEditor((prev) => ({ ...prev, bold: !prev.bold }));
+                      } else if (e.key === "i" || e.key === "I") {
+                        e.preventDefault();
+                        setTextBoxEditor((prev) => ({ ...prev, italic: !prev.italic }));
+                      } else if (e.key === "u" || e.key === "U") {
+                        e.preventDefault();
+                        setTextBoxEditor((prev) => ({ ...prev, underline: !prev.underline }));
+                      } else if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleCommitTextBox();
+                      }
+                    } else if (e.key === "Escape") {
+                      setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
+                    }
+                  }}
+                  onBlur={() => {
+                    if (textBoxEditor.text.trim()) {
+                      handleCommitTextBox();
+                    } else {
+                      setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
+                    }
+                  }}
+                  placeholder="Type here..."
+                  style={{
+                    color: textBoxEditor.textColor,
+                    fontSize: `${textBoxEditor.fontSize}px`,
+                    lineHeight: 1.35,
+                    fontFamily: "'Segoe UI', system-ui, sans-serif",
+                    fontWeight: textBoxEditor.bold ? "bold" : "600",
+                    fontStyle: textBoxEditor.italic ? "italic" : "normal",
+                    textDecoration: textBoxEditor.underline ? "underline" : "none",
+                    backgroundColor: textBoxEditor.hasBg ? textBoxEditor.bgColor : "rgba(15, 23, 42, 0.4)",
+                    border: textBoxEditor.hasBorder
+                      ? `${textBoxEditor.borderWidth}px solid ${textBoxEditor.borderColor}`
+                      : "1.5px dashed rgba(255, 255, 255, 0.4)",
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    width: "100%",
+                    minHeight: `${Math.max(42, textBoxEditor.height)}px`,
+                    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+                    outline: "none",
+                    resize: "both",
+                  }}
+                  className="caret-sky-400 font-semibold"
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2220,7 +2922,11 @@ function drawAnnotationObject(
     ctx.stroke();
   } else if (obj.type === "text") {
     const fontSize = obj.fontSize || 22;
-    ctx.font = `600 ${fontSize}px 'Segoe UI', system-ui, sans-serif`;
+    const isBold = !!obj.bold;
+    const isItalic = !!obj.italic;
+    const isUnderline = !!obj.underline;
+
+    ctx.font = `${isItalic ? "italic " : ""}${isBold ? "bold " : "600 "}${fontSize}px 'Segoe UI', system-ui, sans-serif`;
 
     const lines = obj.text.split("\n");
     const lineHeight = fontSize * 1.35;
@@ -2238,14 +2944,14 @@ function drawAnnotationObject(
       boxH = lines.length * lineHeight + padding * 2;
     }
 
-    if (obj.bgColor) {
+    if (obj.hasBg !== false && obj.bgColor) {
       ctx.fillStyle = obj.bgColor;
       ctx.beginPath();
       ctx.roundRect(obj.x, obj.y, boxW, boxH, 8);
       ctx.fill();
     }
 
-    if (obj.borderColor) {
+    if (obj.hasBorder !== false && obj.borderColor) {
       ctx.strokeStyle = obj.borderColor;
       ctx.lineWidth = obj.borderWidth || 2;
       ctx.beginPath();
@@ -2253,12 +2959,22 @@ function drawAnnotationObject(
       ctx.stroke();
     }
 
-    // If background is white/light and text color is too bright, render dark slate text for perfect contrast
-    const isLightBg = obj.bgColor && (obj.bgColor.includes("255, 255, 255") || obj.bgColor.toLowerCase() === "#ffffff" || obj.bgColor.toLowerCase() === "#fff");
-    ctx.fillStyle = (isLightBg && (obj.color === "#FFFFFF" || obj.color === "#FFDE2A")) ? "#0f172a" : obj.color;
+    ctx.fillStyle = obj.color || "#EF4444";
     ctx.textBaseline = "top";
     for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], obj.x + padding, obj.y + padding + i * lineHeight);
+      const lineY = obj.y + padding + i * lineHeight;
+      ctx.fillText(lines[i], obj.x + padding, lineY);
+
+      if (isUnderline) {
+        const textMetrics = ctx.measureText(lines[i]);
+        const underlineY = lineY + fontSize + 2;
+        ctx.strokeStyle = obj.color || "#EF4444";
+        ctx.lineWidth = Math.max(1.5, fontSize / 14);
+        ctx.beginPath();
+        ctx.moveTo(obj.x + padding, underlineY);
+        ctx.lineTo(obj.x + padding + textMetrics.width, underlineY);
+        ctx.stroke();
+      }
     }
   } else if (obj.type === "highlight") {
     ctx.fillStyle = obj.color;
@@ -2373,18 +3089,31 @@ function drawCropOverlay(
   ctx: CanvasRenderingContext2D,
   crop: { x: number; y: number; w: number; h: number },
   cw: number,
-  ch: number
+  ch: number,
+  isCropOut = false
 ) {
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-  ctx.fillRect(0, 0, cw, crop.y);
-  ctx.fillRect(0, crop.y + crop.h, cw, ch - (crop.y + crop.h));
-  ctx.fillRect(0, crop.y, crop.x, crop.h);
-  ctx.fillRect(crop.x + crop.w, crop.y, cw - (crop.x + crop.w), crop.h);
+  if (isCropOut) {
+    // Crop Out: Highlight strip to remove with amber/red overlay and dashed border
+    ctx.fillStyle = "rgba(239, 68, 68, 0.25)";
+    ctx.fillRect(crop.x, crop.y, crop.w, crop.h);
 
-  ctx.strokeStyle = "#10B981";
-  ctx.lineWidth = 2.5;
-  ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
+    ctx.strokeStyle = "#F59E0B";
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 6]);
+    ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
+  } else {
+    // Crop Keep: Dim outside area, highlight inside with emerald border
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(0, 0, cw, crop.y);
+    ctx.fillRect(0, crop.y + crop.h, cw, ch - (crop.y + crop.h));
+    ctx.fillRect(0, crop.y, crop.x, crop.h);
+    ctx.fillRect(crop.x + crop.w, crop.y, cw - (crop.x + crop.w), crop.h);
+
+    ctx.strokeStyle = "#10B981";
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
+  }
   ctx.restore();
 }
 

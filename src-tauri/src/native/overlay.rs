@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
     GetStockObject, NULL_BRUSH, BACKGROUND_MODE, SelectObject, SetBkMode, SetTextColor,
-    DT_CENTER, DT_SINGLELINE, DT_VCENTER, FW_SEMIBOLD, PAINTSTRUCT, PS_SOLID, SRCCOPY,
+    DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FW_SEMIBOLD, PAINTSTRUCT, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
@@ -256,6 +256,70 @@ unsafe fn run_overlay_window(
 }
 
 #[cfg(windows)]
+unsafe fn find_target_rect(pt: POINT, snapshot: &ScreenSnapshot, hwnd_overlay: HWND) -> (i32, i32, u32, u32, bool) {
+    // 1. Check if there's a specific visible window or control under the cursor
+    let hwnd_under = windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(pt);
+    if !hwnd_under.0.is_null() && hwnd_under != hwnd_overlay {
+        let root = windows::Win32::UI::WindowsAndMessaging::GetAncestor(
+            hwnd_under,
+            windows::Win32::UI::WindowsAndMessaging::GA_ROOT,
+        );
+        let target_hwnd = if !root.0.is_null() && root != hwnd_overlay && windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(root).as_bool() {
+            root
+        } else {
+            hwnd_under
+        };
+
+        let mut rc = RECT::default();
+        if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(target_hwnd, &mut rc).is_ok() {
+            let win_x = rc.left;
+            let win_y = rc.top;
+            let win_w = (rc.right - rc.left) as u32;
+            let win_h = (rc.bottom - rc.top) as u32;
+
+            // Check if within virtual screen bounds and not full screen
+            if win_w >= 40 && win_h >= 40 && (win_w < snapshot.width || win_h < snapshot.height) {
+                return (win_x, win_y, win_w, win_h, true);
+            }
+        }
+    }
+
+    // 2. Default to active monitor
+    let h_mon = windows::Win32::Graphics::Gdi::MonitorFromPoint(
+        pt,
+        windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST,
+    );
+    let mut minfo = windows::Win32::Graphics::Gdi::MONITORINFOEXW::default();
+    minfo.monitorInfo.cbSize = std::mem::size_of::<windows::Win32::Graphics::Gdi::MONITORINFOEXW>() as u32;
+    if windows::Win32::Graphics::Gdi::GetMonitorInfoW(
+        h_mon,
+        &mut minfo.monitorInfo as *mut _ as *mut _,
+    ).as_bool() {
+        let rc = minfo.monitorInfo.rcMonitor;
+        let mon_x = rc.left;
+        let mon_y = rc.top;
+        let mon_w = (rc.right - rc.left) as u32;
+        let mon_h = (rc.bottom - rc.top) as u32;
+        return (mon_x, mon_y, mon_w, mon_h, false);
+    }
+
+    (snapshot.x, snapshot.y, snapshot.width, snapshot.height, false)
+}
+
+#[inline]
+fn get_pixel_color(snapshot: &ScreenSnapshot, pt: POINT) -> (u8, u8, u8) {
+    let rel_x = pt.x - snapshot.x;
+    let rel_y = pt.y - snapshot.y;
+    if rel_x >= 0 && rel_x < snapshot.width as i32 && rel_y >= 0 && rel_y < snapshot.height as i32 {
+        let idx = ((rel_y as usize * snapshot.width as usize) + rel_x as usize) * 4;
+        if idx + 3 < snapshot.rgba_data.len() {
+            return (snapshot.rgba_data[idx], snapshot.rgba_data[idx + 1], snapshot.rgba_data[idx + 2]);
+        }
+    }
+    (0, 0, 0)
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn overlay_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -339,7 +403,7 @@ unsafe extern "system" fn overlay_wndproc(
                     let sel_w = (sel_right - sel_left) as u32;
                     let sel_h = (sel_bottom - sel_top) as u32;
 
-                    if sel_w >= 4 && sel_h >= 4 {
+                    if sel_w >= 6 && sel_h >= 6 {
                         let _ = ShowWindow(hwnd, SW_HIDE);
 
                         match state.snapshot.crop(sel_left, sel_top, sel_w, sel_h) {
@@ -361,6 +425,32 @@ unsafe extern "system" fn overlay_wndproc(
                             }
                             Err(e) => {
                                 eprintln!("Crop failed: {}", e);
+                            }
+                        }
+                    } else {
+                        // User clicked without dragging -> Auto snap to Window or Active Monitor!
+                        let (target_x, target_y, target_w, target_h, is_window) = find_target_rect(pt, &state.snapshot, hwnd);
+
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        match state.snapshot.crop(target_x, target_y, target_w, target_h) {
+                            Ok(cropped) => {
+                                let _ = copy_rgba_to_clipboard(cropped.width, cropped.height, &cropped.rgba_data);
+
+                                let capture_id = uuid::Uuid::new_v4().to_string();
+                                if let Ok(record) = persist_capture(
+                                    &state.db,
+                                    &state.paths,
+                                    &capture_id,
+                                    if is_window { "window" } else { "fullscreen" },
+                                    cropped.width,
+                                    cropped.height,
+                                    &cropped.rgba_data,
+                                ) {
+                                    (state.callback)(record);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Target crop failed: {}", e);
                             }
                         }
                     }
@@ -390,11 +480,14 @@ unsafe extern "system" fn overlay_wndproc(
                 // 1. Instant copy of pre-rendered dimmed screen (0ms)
                 let _ = BitBlt(mem_dc, 0, 0, w, h, dim_dc, 0, 0, SRCCOPY);
 
+                let cur_screen_x = state.current_pt.x - state.snapshot.x;
+                let cur_screen_y = state.current_pt.y - state.snapshot.y;
+
                 if state.is_dragging {
                     let c_start_x = state.start_pt.x - state.snapshot.x;
                     let c_start_y = state.start_pt.y - state.snapshot.y;
-                    let c_curr_x = state.current_pt.x - state.snapshot.x;
-                    let c_curr_y = state.current_pt.y - state.snapshot.y;
+                    let c_curr_x = cur_screen_x;
+                    let c_curr_y = cur_screen_y;
 
                     let left = c_start_x.min(c_curr_x);
                     let top = c_start_y.min(c_curr_y);
@@ -423,10 +516,10 @@ unsafe extern "system" fn overlay_wndproc(
                             let size_text = format!("{} × {}", sel_w, sel_h);
                             let mut wide_text: Vec<u16> = size_text.encode_utf16().chain(std::iter::once(0)).collect();
 
-                            let badge_w = 100;
-                            let badge_h = 22;
+                            let badge_w = 110;
+                            let badge_h = 24;
                             let badge_x = left + 6;
-                            let badge_y = if top > 28 { top - 26 } else { top + 6 };
+                            let badge_y = if top > 30 { top - 28 } else { top + 6 };
 
                             let badge_rc = RECT {
                                 left: badge_x,
@@ -463,9 +556,172 @@ unsafe extern "system" fn overlay_wndproc(
                         let _ = SelectObject(mem_dc, old_pen);
                         let _ = DeleteObject(border_pen);
                     }
+                } else {
+                    // Not dragging: ShareX-Style Auto Window/Element Snapping + Crosshair Guide Lines!
+                    let (target_x, target_y, target_w, target_h, is_window) = find_target_rect(state.current_pt, &state.snapshot, hwnd);
+                    let target_rel_x = target_x - state.snapshot.x;
+                    let target_rel_y = target_y - state.snapshot.y;
+
+                    if target_w > 0 && target_h > 0 {
+                        // Copy bright region for target window / monitor
+                        let src_dc = CreateCompatibleDC(hdc);
+                        let old_src = SelectObject(src_dc, state.h_bg_bitmap);
+                        let _ = BitBlt(mem_dc, target_rel_x, target_rel_y, target_w as i32, target_h as i32, src_dc, target_rel_x, target_rel_y, SRCCOPY);
+                        let _ = SelectObject(src_dc, old_src);
+                        let _ = DeleteDC(src_dc);
+
+                        // Draw glowing glowing cyan / orange border
+                        let snap_pen = CreatePen(PS_SOLID, 2, if is_window { rgb(243, 111, 33) } else { rgb(56, 189, 248) });
+                        let old_pen = SelectObject(mem_dc, snap_pen);
+                        let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+
+                        let _ = windows::Win32::Graphics::Gdi::Rectangle(
+                            mem_dc,
+                            target_rel_x,
+                            target_rel_y,
+                            target_rel_x + target_w as i32,
+                            target_rel_y + target_h as i32,
+                        );
+
+                        // Draw top pill status badge
+                        let label_prefix = if is_window { "🪟 Window" } else { "🖥️ Screen" };
+                        let hint_text = format!("{} {} × {}  •  Click to capture  •  Drag to select region", label_prefix, target_w, target_h);
+                        let mut wide_hint: Vec<u16> = hint_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+                        let badge_w = 460;
+                        let badge_h = 30;
+                        let badge_x = target_rel_x + (target_w as i32 - badge_w) / 2;
+                        let badge_y = (target_rel_y + 16).max(12);
+
+                        let badge_rc = RECT {
+                            left: badge_x,
+                            top: badge_y,
+                            right: badge_x + badge_w,
+                            bottom: badge_y + badge_h,
+                        };
+
+                        let bg_brush = CreateSolidBrush(rgb(15, 23, 42));
+                        let _ = FillRect(mem_dc, &badge_rc, bg_brush);
+                        let _ = DeleteObject(bg_brush);
+
+                        let border_badge_pen = CreatePen(PS_SOLID, 1, if is_window { rgb(243, 111, 33) } else { rgb(56, 189, 248) });
+                        let old_badge_pen = SelectObject(mem_dc, border_badge_pen);
+                        let _ = windows::Win32::Graphics::Gdi::Rectangle(
+                            mem_dc,
+                            badge_x,
+                            badge_y,
+                            badge_x + badge_w,
+                            badge_y + badge_h,
+                        );
+                        let _ = SelectObject(mem_dc, old_badge_pen);
+                        let _ = DeleteObject(border_badge_pen);
+
+                        let font = CreateFontW(
+                            13, 0, 0, 0, FW_SEMIBOLD.0 as i32, 0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI")
+                        );
+                        let old_font = SelectObject(mem_dc, font);
+                        let _ = SetBkMode(mem_dc, BACKGROUND_MODE(1));
+                        let _ = SetTextColor(mem_dc, rgb(255, 255, 255));
+
+                        let mut text_rc = badge_rc;
+                        let text_len = wide_hint.len();
+                        let _ = DrawTextW(
+                            mem_dc,
+                            &mut wide_hint[..text_len - 1],
+                            &mut text_rc,
+                            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                        );
+
+                        let _ = SelectObject(mem_dc, old_font);
+                        let _ = DeleteObject(font);
+
+                        let _ = SelectObject(mem_dc, old_brush);
+                        let _ = SelectObject(mem_dc, old_pen);
+                        let _ = DeleteObject(snap_pen);
+                    }
                 }
 
-                // 5. Final blit to screen (smooth 240Hz zero-flicker)
+                // 4. ShareX-Style Full-Screen Magnetic Crosshair Lines
+                let crosshair_pen = CreatePen(PS_SOLID, 1, rgb(56, 189, 248));
+                let old_cross_pen = SelectObject(mem_dc, crosshair_pen);
+
+                // Horizontal crosshair line
+                let _ = windows::Win32::Graphics::Gdi::MoveToEx(mem_dc, 0, cur_screen_y, None);
+                let _ = windows::Win32::Graphics::Gdi::LineTo(mem_dc, w, cur_screen_y);
+
+                // Vertical crosshair line
+                let _ = windows::Win32::Graphics::Gdi::MoveToEx(mem_dc, cur_screen_x, 0, None);
+                let _ = windows::Win32::Graphics::Gdi::LineTo(mem_dc, cur_screen_x, h);
+
+                let _ = SelectObject(mem_dc, old_cross_pen);
+                let _ = DeleteObject(crosshair_pen);
+
+                // 5. Pixel Loupe / Color HUD beside cursor
+                let (r, g, b) = get_pixel_color(&state.snapshot, state.current_pt);
+                let loupe_text = format!("X: {}  Y: {}\n#{:02X}{:02X}{:02X}", state.current_pt.x, state.current_pt.y, r, g, b);
+                let mut wide_loupe: Vec<u16> = loupe_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+                let loupe_w = 120;
+                let loupe_h = 42;
+                let loupe_x = if cur_screen_x + 18 + loupe_w < w { cur_screen_x + 18 } else { cur_screen_x - loupe_w - 18 };
+                let loupe_y = if cur_screen_y + 18 + loupe_h < h { cur_screen_y + 18 } else { cur_screen_y - loupe_h - 18 };
+
+                let loupe_rc = RECT {
+                    left: loupe_x,
+                    top: loupe_y,
+                    right: loupe_x + loupe_w,
+                    bottom: loupe_y + loupe_h,
+                };
+
+                let bg_loupe = CreateSolidBrush(rgb(15, 23, 42));
+                let _ = FillRect(mem_dc, &loupe_rc, bg_loupe);
+                let _ = DeleteObject(bg_loupe);
+
+                // Color swatch inside loupe
+                let swatch_rc = RECT {
+                    left: loupe_x + 6,
+                    top: loupe_y + 6,
+                    right: loupe_x + 22,
+                    bottom: loupe_y + 22,
+                };
+                let swatch_brush = CreateSolidBrush(rgb(r, g, b));
+                let _ = FillRect(mem_dc, &swatch_rc, swatch_brush);
+                let _ = DeleteObject(swatch_brush);
+
+                let loupe_border_pen = CreatePen(PS_SOLID, 1, rgb(56, 189, 248));
+                let old_l_pen = SelectObject(mem_dc, loupe_border_pen);
+                let old_l_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                let _ = windows::Win32::Graphics::Gdi::Rectangle(mem_dc, loupe_x, loupe_y, loupe_x + loupe_w, loupe_y + loupe_h);
+                let _ = windows::Win32::Graphics::Gdi::Rectangle(mem_dc, swatch_rc.left, swatch_rc.top, swatch_rc.right, swatch_rc.bottom);
+                let _ = SelectObject(mem_dc, old_l_brush);
+                let _ = SelectObject(mem_dc, old_l_pen);
+                let _ = DeleteObject(loupe_border_pen);
+
+                let font_loupe = CreateFontW(
+                    12, 0, 0, 0, FW_SEMIBOLD.0 as i32, 0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI")
+                );
+                let old_l_font = SelectObject(mem_dc, font_loupe);
+                let _ = SetBkMode(mem_dc, BACKGROUND_MODE(1));
+                let _ = SetTextColor(mem_dc, rgb(255, 255, 255));
+
+                let mut text_l_rc = RECT {
+                    left: loupe_x + 28,
+                    top: loupe_y + 4,
+                    right: loupe_x + loupe_w - 4,
+                    bottom: loupe_y + loupe_h - 4,
+                };
+                let text_l_len = wide_loupe.len();
+                let _ = DrawTextW(
+                    mem_dc,
+                    &mut wide_loupe[..text_l_len - 1],
+                    &mut text_l_rc,
+                    DT_LEFT | DT_VCENTER,
+                );
+
+                let _ = SelectObject(mem_dc, old_l_font);
+                let _ = DeleteObject(font_loupe);
+
+                // 6. Final blit to screen (smooth 240Hz zero-flicker)
                 let _ = BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
 
                 let _ = SelectObject(dim_dc, old_dim);
