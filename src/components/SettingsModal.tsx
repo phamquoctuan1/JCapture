@@ -214,9 +214,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsDownloading(true);
     setDownloadMessage("Downloading latest update from GitHub...");
 
+    const setupAsset = latestRelease.assets?.find((a) => a.name.includes("setup.exe"));
     const portableAsset = latestRelease.assets?.find((a) => a.name.includes("Portable.exe"));
-    const setupAsset = latestRelease.assets?.find((a) => a.name.includes("setup.exe") || a.name.endsWith(".exe") || a.name.endsWith(".msi"));
-    const exeAsset = portableAsset || setupAsset;
+    const msiAsset = latestRelease.assets?.find((a) => a.name.endsWith(".msi"));
+    const exeAsset = setupAsset || portableAsset || msiAsset;
 
     try {
       if (exeAsset) {

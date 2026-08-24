@@ -525,11 +525,11 @@ pub async fn download_and_install_update(
     download_url: String,
 ) -> Result<String, String> {
     let temp_dir = std::env::temp_dir();
-    let is_portable = download_url.contains("Portable") || !download_url.contains("setup");
-    let downloaded_file = if is_portable {
-        temp_dir.join("JCapture_new.exe")
-    } else {
+    let is_setup = download_url.to_lowercase().contains("setup") || download_url.to_lowercase().ends_with(".msi");
+    let downloaded_file = if is_setup {
         temp_dir.join("JCapture_setup_update.exe")
+    } else {
+        temp_dir.join("JCapture_new.exe")
     };
     let dest_str = downloaded_file.to_string_lossy().to_string();
 
@@ -589,12 +589,13 @@ pub async fn download_and_install_update(
     let current_pid = std::process::id();
     let is_in_program_files = current_exe.to_lowercase().contains("program files");
 
-    if is_in_program_files || (!is_portable && downloaded_file.to_string_lossy().ends_with(".exe")) {
-        // Run installer with UAC elevation to update Program Files directory cleanly
+    if is_setup || is_in_program_files {
+        // Run installer with UAC elevation to update Program Files / AppData directory cleanly
         let ps_installer = format!(
             "$pidToWait = {}; $installer = '{}'; \
              Start-Sleep -Milliseconds 400; \
              while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
+             Get-Process -Name 'jcapture', 'JCapture' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; \
              Start-Process -FilePath $installer -Verb RunAs;",
             current_pid,
             dest_str.replace('\'', "''")
@@ -616,6 +617,8 @@ pub async fn download_and_install_update(
             "$pidToWait = {}; $src = '{}'; $dst = '{}'; $dstOld = \"$dst.old\"; \
              Start-Sleep -Milliseconds 400; \
              while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 150 }}; \
+             Get-Process -Name 'jcapture', 'JCapture' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; \
+             Start-Sleep -Milliseconds 300; \
              Remove-Item -LiteralPath $dstOld -Force -ErrorAction SilentlyContinue; \
              $replaced = $false; \
              for ($i = 0; $i -lt 30; $i++) {{ \
