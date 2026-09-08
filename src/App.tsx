@@ -416,7 +416,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 select-none overflow-hidden border border-zinc-800/80 rounded-lg shadow-2xl">
+    <div className="flex flex-col h-screen w-screen bg-white text-zinc-900 select-none overflow-hidden border border-zinc-800/80 rounded-lg shadow-2xl">
       <Header
         onTriggerCapture={handleTriggerCapture}
         onTriggerFullscreenCapture={handleTriggerFullscreenCapture}

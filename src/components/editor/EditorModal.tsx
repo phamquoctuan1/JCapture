@@ -534,6 +534,15 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     pushState(nextObjects, undefined, newDim);
   };
 
+  const handleAlignSelectedImage = (horizontal: "left" | "center" | "right", vertical: "top" | "middle" | "bottom") => {
+    if (!selectedId) return;
+    const selected = objects.find((obj): obj is ImageOverlayObject => obj.id === selectedId && obj.type === "image");
+    if (!selected) return;
+    const x = horizontal === "left" ? 0 : horizontal === "center" ? Math.round((canvasDim.width - selected.width) / 2) : Math.max(0, canvasDim.width - selected.width);
+    const y = vertical === "top" ? 0 : vertical === "middle" ? Math.round((canvasDim.height - selected.height) / 2) : Math.max(0, canvasDim.height - selected.height);
+    pushState(objects.map((obj) => obj.id === selectedId ? { ...obj, x, y } : obj));
+  };
+
   // Revert back to original uncropped image
   const handleRevertToOriginal = () => {
     if (!originalDataUrlRef.current) return;
@@ -668,8 +677,10 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       let curW = canvasDim.width;
       let curH = canvasDim.height;
 
-      let posX = dropX !== undefined ? dropX : Math.round((curW - w) / 2);
-      let posY = dropY !== undefined ? dropY : Math.round((curH - h) / 2);
+      // Keep inserted images fully inside the canvas; expansion below handles
+      // images that are larger than the original workspace.
+      let posX = Math.max(0, dropX !== undefined ? dropX : Math.round((curW - w) / 2));
+      let posY = Math.max(0, dropY !== undefined ? dropY : Math.round((curH - h) / 2));
 
       // Expand canvas if dropped outside
       let nextW = curW;
@@ -865,7 +876,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
-    ctx.fillStyle = "#09090b";
+    ctx.fillStyle = "#FFFFFF";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw background image
@@ -1184,7 +1195,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       if (canvas && bgImage) {
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          ctx.fillStyle = "#09090b";
+          ctx.fillStyle = "#FFFFFF";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(bgImage, 0, 0);
           for (const obj of objects) {
@@ -1308,7 +1319,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     if (canvas && bgImage) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        ctx.fillStyle = "#09090b";
+        ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(bgImage, 0, 0);
         for (const obj of [...objects, temp]) {
@@ -1977,6 +1988,22 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                 <Grid2X2 className="w-3 h-3" />
                 <span className="hidden sm:inline">Grid</span>
               </button>
+            </div>
+          )}
+
+          {selectedId && objects.some((o) => o.id === selectedId && o.type === "image") && (
+            <div className="flex items-center gap-0.5 bg-sky-950/40 p-0.5 rounded-lg border border-sky-500/30 animate-in fade-in" title="Chọn vị trí ảnh trên canvas">
+              <span className="px-1 text-[10px] text-sky-300">Vị trí</span>
+              {(["left", "center", "right"] as const).map((h) => (
+                <button key={h} onClick={() => handleAlignSelectedImage(h, "middle")} className="px-1.5 py-0.5 rounded text-[10px] text-sky-200 hover:bg-sky-500/20" title={`Căn ${h === "left" ? "trái" : h === "center" ? "giữa" : "phải"}`}>
+                  {h === "left" ? "←" : h === "center" ? "↔" : "→"}
+                </button>
+              ))}
+              {(["top", "middle", "bottom"] as const).map((v) => (
+                <button key={v} onClick={() => handleAlignSelectedImage("center", v)} className="px-1.5 py-0.5 rounded text-[10px] text-sky-200 hover:bg-sky-500/20" title={`Căn ${v === "top" ? "trên" : v === "middle" ? "giữa" : "dưới"}`}>
+                  {v === "top" ? "↑" : v === "middle" ? "↕" : "↓"}
+                </button>
+              ))}
             </div>
           )}
 
