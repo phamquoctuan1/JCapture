@@ -44,8 +44,12 @@ import {
   ImageOverlayObject,
   PenObject,
   TextObject,
+  TextRun,
   ToolType,
 } from "../../types";
+
+import { drawTextBox, layoutText } from "./textLayout";
+import { RichTextInput, RichTextInputHandle } from "./RichTextInput";
 
 export interface InitialMergeConfig {
   records: CaptureRecord[];
@@ -71,7 +75,7 @@ interface EditorHistorySnapshot {
 type ResizeHandleType = "nw" | "ne" | "se" | "sw" | "n" | "s" | "e" | "w";
 
 const COLORS = [
-  "#FFDE2A", // Brand Yellow
+  "#F4E534", // Highlighter yellow
   "#EF4444", // Red
   "#F97316", // Orange
   "#EAB308", // Yellow
@@ -220,6 +224,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     width: number;
     height: number;
     text: string;
+    runs?: TextRun[];
     fontSize: number;
     textColor: string;
     bold: boolean;
@@ -249,6 +254,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     hasBg: true,
     bgColor: "#FFFFFF",
   });
+
+  const richTextRef = useRef<RichTextInputHandle>(null);
+  const formatText = (patch: Partial<Omit<TextRun, "text">>) => {
+    richTextRef.current?.format(patch);
+  };
 
   // Crop mode state
   const [isCropMode, setIsCropMode] = useState(false);
@@ -399,6 +409,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   // Push new state to undo/redo history
   const pushState = useCallback((newObjects: AnnotationObject[], newBgSrc?: string, newDim?: { width: number; height: number }) => {
+    const measureCtx = canvasRef.current?.getContext("2d");
+    if (measureCtx) newObjects = newObjects.map(obj => obj.type === "text"
+      ? { ...obj, height: Math.max(obj.height || 0, layoutText(measureCtx, obj).height) } : obj);
     const activeBgSrc = newBgSrc || currentBgSrcRef.current;
     const activeDim = newDim || canvasDim;
     const newHistory = history.slice(0, historyIndex + 1);
@@ -1040,7 +1053,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         y,
         number: stepCounter,
         color: currentColor,
-        textColor: currentColor === "#FFDE2A" || currentColor === "#FFFFFF" ? "#000000" : "#FFFFFF",
+        textColor: currentColor === COLORS[0] || currentColor === "#FFFFFF" ? "#000000" : "#FFFFFF",
         radius: Math.max(16, currentStrokeWidth * 4),
       };
       setStepCounter((c) => c + 1);
@@ -1114,7 +1127,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         width: 0,
         height: 0,
         color: currentColor,
-        opacity: 0.35,
+        opacity: 1,
       };
     } else if (activeTool === "blur") {
       currentTempObjectRef.current = {
@@ -1387,6 +1400,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         width: textObj.width || 240,
         height: textObj.height || 80,
         text: textObj.text,
+        runs: textObj.runs,
         fontSize: textObj.fontSize || 22,
         textColor: textObj.color || "#EF4444",
         bold: !!textObj.bold,
@@ -1420,6 +1434,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       width: textBoxEditor.width,
       height: textBoxEditor.height,
       text: textBoxEditor.text,
+      runs: textBoxEditor.runs,
       fontSize: textBoxEditor.fontSize,
       color: textBoxEditor.textColor,
       bold: textBoxEditor.bold,
@@ -1431,6 +1446,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       borderColor: textBoxEditor.hasBorder ? textBoxEditor.borderColor : undefined,
       borderWidth: textBoxEditor.hasBorder ? textBoxEditor.borderWidth : undefined,
     };
+    const measureCtx = canvasRef.current?.getContext("2d");
+    if (measureCtx) textObj.height = Math.max(textObj.height || 0, layoutText(measureCtx, textObj).height);
+
 
     if (textBoxEditor.editingId) {
       pushState(objects.map((o) => (o.id === textBoxEditor.editingId ? textObj : o)));
@@ -1627,7 +1645,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       const updated = objects.map((obj) => {
         if (obj.id !== selectedId) return obj;
         if (obj.type === "text") {
-          return { ...obj, color: newColor };
+          return { ...obj, color: newColor, runs: obj.runs?.map(run => ({ ...run, color: newColor })) };
         }
         if ("color" in obj) {
           return { ...obj, color: newColor };
@@ -1662,6 +1680,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return {
         ...obj,
         [prop]: !obj[prop],
+        runs: obj.runs?.map(run => ({ ...run, [prop]: !obj[prop] })),
       };
     });
     pushState(updated);
@@ -1674,6 +1693,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       return {
         ...obj,
         [prop]: val,
+        runs: ["fontSize", "color", "bold", "italic", "underline"].includes(prop) ? obj.runs?.map(run => ({ ...run, [prop]: val })) : obj.runs,
       };
     });
     pushState(updated);
@@ -1985,7 +2005,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         <div className="flex items-center gap-1.5">
           {(() => {
             const selObj = objects.find((o) => o.id === selectedId);
-            if (selObj && selObj.type === "text") {
+            if (selObj && selObj.type === "text" && !textBoxEditor.visible) {
               const textObj = selObj as TextObject;
               return (
                 <div className="flex flex-wrap items-center gap-1.5 bg-zinc-900/90 border border-sky-500/40 p-1 rounded-xl shadow-lg animate-in fade-in">
@@ -2165,6 +2185,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                         width: textObj.width || 240,
                         height: textObj.height || 80,
                         text: textObj.text,
+        runs: textObj.runs,
                         fontSize: textObj.fontSize || 22,
                         textColor: textObj.color || "#EF4444",
                         bold: !!textObj.bold,
@@ -2501,7 +2522,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                         key={sz}
                         type="button"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => setTextBoxEditor((prev) => ({ ...prev, fontSize: sz }))}
+                        onClick={() => formatText({ fontSize: sz })}
                         className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
                           textBoxEditor.fontSize === sz
                             ? "bg-amber-500 text-black font-bold"
@@ -2518,7 +2539,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, bold: !prev.bold }))}
+                      onClick={() => formatText({ bold: true })}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.bold
                           ? "bg-sky-600 text-white font-bold"
@@ -2532,7 +2553,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, italic: !prev.italic }))}
+                      onClick={() => formatText({ italic: true })}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.italic
                           ? "bg-sky-600 text-white font-bold"
@@ -2546,7 +2567,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setTextBoxEditor((prev) => ({ ...prev, underline: !prev.underline }))}
+                      onClick={() => formatText({ underline: true })}
                       className={`p-1 rounded text-xs transition-colors ${
                         textBoxEditor.underline
                           ? "bg-sky-600 text-white font-bold"
@@ -2566,7 +2587,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                         key={c}
                         type="button"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => setTextBoxEditor((prev) => ({ ...prev, textColor: c }))}
+                        onClick={() => formatText({ color: c })}
                         className={`w-3 h-3 rounded-full transition-transform ${
                           textBoxEditor.textColor.toUpperCase() === c.toUpperCase()
                             ? "scale-125 ring-2 ring-sky-400"
@@ -2579,7 +2600,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                       <input
                         type="color"
                         value={textBoxEditor.textColor}
-                        onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, textColor: e.target.value }))}
+                        onChange={(e) => formatText({ color: e.target.value })}
                         className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer opacity-0"
                       />
                       <div className="w-full h-full" style={{ backgroundColor: textBoxEditor.textColor }} />
@@ -2702,21 +2723,21 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                 </div>
 
                 {/* Direct In-Place Textarea */}
-                <textarea
-                  autoFocus
-                  value={textBoxEditor.text}
-                  onChange={(e) => setTextBoxEditor((prev) => ({ ...prev, text: e.target.value }))}
+                <RichTextInput
+                  ref={richTextRef}
+                  initialRuns={textBoxEditor.runs || [{ text: textBoxEditor.text, fontSize: textBoxEditor.fontSize, color: textBoxEditor.textColor, bold: textBoxEditor.bold, italic: textBoxEditor.italic, underline: textBoxEditor.underline }]}
+                  onChange={(runs, height) => setTextBoxEditor(prev => ({ ...prev, runs, text: runs.map(run => run.text).join(""), height: Math.max(prev.height, height) }))}
                   onKeyDown={(e) => {
                     if (e.ctrlKey || e.metaKey) {
                       if (e.key === "b" || e.key === "B") {
                         e.preventDefault();
-                        setTextBoxEditor((prev) => ({ ...prev, bold: !prev.bold }));
+                        formatText({ bold: true });
                       } else if (e.key === "i" || e.key === "I") {
                         e.preventDefault();
-                        setTextBoxEditor((prev) => ({ ...prev, italic: !prev.italic }));
+                        formatText({ italic: true });
                       } else if (e.key === "u" || e.key === "U") {
                         e.preventDefault();
-                        setTextBoxEditor((prev) => ({ ...prev, underline: !prev.underline }));
+                        formatText({ underline: true });
                       } else if (e.key === "Enter") {
                         e.preventDefault();
                         handleCommitTextBox();
@@ -2725,13 +2746,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                       setTextBoxEditor((prev) => ({ ...prev, visible: false, text: "", editingId: null }));
                     }
                   }}
-                  placeholder="Type here..."
                   style={{
                     color: textBoxEditor.textColor,
                     fontSize: `${textBoxEditor.fontSize}px`,
                     lineHeight: 1.35,
                     fontFamily: "'Segoe UI', system-ui, sans-serif",
-                    fontWeight: textBoxEditor.bold ? "bold" : "600",
+                    fontWeight: textBoxEditor.bold ? "bold" : "400",
                     fontStyle: textBoxEditor.italic ? "italic" : "normal",
                     textDecoration: textBoxEditor.underline ? "underline" : "none",
                     backgroundColor: textBoxEditor.hasBg ? textBoxEditor.bgColor : "rgba(15, 23, 42, 0.4)",
@@ -2746,7 +2766,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                     outline: "none",
                     resize: "both",
                   }}
-                  className="caret-sky-400 font-semibold"
                 />
               </div>
             )}
@@ -3025,63 +3044,11 @@ function drawAnnotationObject(
     ctx.lineTo(obj.endX, obj.endY);
     ctx.stroke();
   } else if (obj.type === "text") {
-    const fontSize = obj.fontSize || 22;
-    const isBold = !!obj.bold;
-    const isItalic = !!obj.italic;
-    const isUnderline = !!obj.underline;
-
-    ctx.font = `${isItalic ? "italic " : ""}${isBold ? "bold " : "600 "}${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-
-    const lines = obj.text.split("\n");
-    const lineHeight = fontSize * 1.35;
-    const padding = 10;
-
-    let boxW = obj.width || 0;
-    let boxH = obj.height || 0;
-
-    if (!boxW || !boxH) {
-      let maxLineWidth = 0;
-      for (const line of lines) {
-        maxLineWidth = Math.max(maxLineWidth, ctx.measureText(line).width);
-      }
-      boxW = maxLineWidth + padding * 2;
-      boxH = lines.length * lineHeight + padding * 2;
-    }
-
-    if (obj.hasBg !== false && obj.bgColor) {
-      ctx.fillStyle = obj.bgColor;
-      ctx.beginPath();
-      ctx.roundRect(obj.x, obj.y, boxW, boxH, 8);
-      ctx.fill();
-    }
-
-    if (obj.hasBorder !== false && obj.borderColor) {
-      ctx.strokeStyle = obj.borderColor;
-      ctx.lineWidth = obj.borderWidth || 2;
-      ctx.beginPath();
-      ctx.roundRect(obj.x, obj.y, boxW, boxH, 8);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = obj.color || "#EF4444";
-    ctx.textBaseline = "top";
-    for (let i = 0; i < lines.length; i++) {
-      const lineY = obj.y + padding + i * lineHeight;
-      ctx.fillText(lines[i], obj.x + padding, lineY);
-
-      if (isUnderline) {
-        const textMetrics = ctx.measureText(lines[i]);
-        const underlineY = lineY + fontSize + 2;
-        ctx.strokeStyle = obj.color || "#EF4444";
-        ctx.lineWidth = Math.max(1.5, fontSize / 14);
-        ctx.beginPath();
-        ctx.moveTo(obj.x + padding, underlineY);
-        ctx.lineTo(obj.x + padding + textMetrics.width, underlineY);
-        ctx.stroke();
-      }
-    }
+    drawTextBox(ctx, obj);
   } else if (obj.type === "highlight") {
     ctx.fillStyle = obj.color;
+    // Tint the background without washing out the text underneath.
+    ctx.globalCompositeOperation = "multiply";
     ctx.globalAlpha = obj.opacity;
     ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
   } else if (obj.type === "blur") {

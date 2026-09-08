@@ -83,6 +83,15 @@ export interface PenObject {
   strokeWidth: number;
 }
 
+export interface TextRun {
+  text: string;
+  fontSize: number;
+  color: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}
+
 export interface TextObject {
   id: string;
   type: "text";
@@ -91,6 +100,7 @@ export interface TextObject {
   width?: number;
   height?: number;
   text: string;
+  runs?: TextRun[];
   fontSize: number;
   color: string;
   bold?: boolean;
