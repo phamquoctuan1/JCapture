@@ -1461,6 +1461,17 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setActiveTool("select");
   };
 
+  useEffect(() => {
+    if (!textBoxEditor.visible) return;
+    const commitOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-text-editor]")) return;
+      handleCommitTextBox();
+    };
+    document.addEventListener("pointerdown", commitOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", commitOnOutsidePointer);
+  }, [textBoxEditor.visible, handleCommitTextBox]);
+
   // Crop Action: Overwrites disk file and database record permanently
   const handleApplyCrop = async () => {
     if (!cropRect || cropRect.w < 10 || cropRect.h < 10 || !bgImage) return;
@@ -2492,6 +2503,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             {/* Direct In-Place Inline Text Box Editor on Canvas */}
             {textBoxEditor.visible && (
               <div
+                data-text-editor
                 style={{
                   position: "absolute",
                   left: textBoxEditor.x,
