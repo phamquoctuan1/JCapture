@@ -977,6 +977,17 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       handleCommitTextBox();
     }
 
+    // Shape tools remain active on empty canvas, but clicking an existing
+    // rectangle, ellipse, or highlight switches to Select so it can be edited.
+    if (activeTool === "rect" || activeTool === "ellipse" || activeTool === "highlight") {
+      const hit = [...objects].reverse().find((obj) => isPointInsideObject(x, y, obj));
+      if (hit && (hit.type === "rect" || hit.type === "ellipse" || hit.type === "highlight")) {
+        setSelectedId(hit.id);
+        setActiveTool("select");
+        return;
+      }
+    }
+
     if (activeTool === "eyedropper") {
       const canvas = canvasRef.current;
       if (canvas) {
