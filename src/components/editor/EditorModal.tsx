@@ -1382,11 +1382,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       if (isSignificant) {
         pushState([...objects, finalObj]);
         setSelectedId(finalObj.id);
-        // Finish one rectangle/highlight stroke in selection mode so the user
-        // can immediately click elsewhere or adjust the created object.
-        if (finalObj.type === "rect" || finalObj.type === "highlight") {
-          setActiveTool("select");
-        }
       }
     }
   };
