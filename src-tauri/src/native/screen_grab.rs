@@ -123,6 +123,10 @@ impl ScreenSnapshot {
             let pixel_count = (width * height) as usize;
             let mut buffer = vec![0u8; pixel_count * 4];
 
+            // A bitmap must be detached from the memory DC before asking GDI
+            // for its bits. Keeping it selected can return partially updated
+            // scanlines on composited/browser surfaces.
+            let _ = SelectObject(hdc_mem, old_obj);
             let lines = GetDIBits(
                 hdc_mem,
                 h_bitmap,
@@ -134,7 +138,6 @@ impl ScreenSnapshot {
             );
 
             // Cleanup GDI objects
-            let _ = SelectObject(hdc_mem, old_obj);
             let _ = DeleteObject(h_bitmap);
             let _ = DeleteDC(hdc_mem);
             let _ = ReleaseDC(HWND(std::ptr::null_mut()), hdc_screen);
@@ -163,6 +166,106 @@ impl ScreenSnapshot {
 
         #[cfg(not(windows))]
         {
+            Err("Screen capture only supported on Windows".to_string())
+        }
+    }
+
+    /// Grabs a single rectangle of the desktop.
+    ///
+    /// Scrolling capture takes one of these per frame, so blitting only the
+    /// tracked region instead of the whole virtual screen keeps each frame
+    /// cheap on large or multi-monitor desktops.
+    pub fn capture_region(x: i32, y: i32, width: u32, height: u32) -> Result<Self, String> {
+        #[cfg(windows)]
+        unsafe {
+            if width == 0 || height == 0 {
+                return Err("Invalid capture region".to_string());
+            }
+            let _ = windows::Win32::UI::HiDpi::SetThreadDpiAwarenessContext(
+                windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            );
+
+            let w = width as i32;
+            let h = height as i32;
+
+            let hdc_screen = GetDC(HWND(std::ptr::null_mut()));
+            if hdc_screen.0.is_null() {
+                return Err("Failed to get screen DC".to_string());
+            }
+            let hdc_mem = CreateCompatibleDC(hdc_screen);
+            if hdc_mem.0.is_null() {
+                let _ = ReleaseDC(HWND(std::ptr::null_mut()), hdc_screen);
+                return Err("Failed to create compatible DC".to_string());
+            }
+            let h_bitmap = CreateCompatibleBitmap(hdc_screen, w, h);
+            if h_bitmap.0.is_null() {
+                let _ = DeleteDC(hdc_mem);
+                let _ = ReleaseDC(HWND(std::ptr::null_mut()), hdc_screen);
+                return Err("Failed to create compatible bitmap".to_string());
+            }
+            let old_obj = SelectObject(hdc_mem, h_bitmap);
+            let blit = BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, x, y, SRCCOPY);
+
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -h,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
+            };
+
+            let mut buffer = vec![0u8; (width * height) as usize * 4];
+            let _ = SelectObject(hdc_mem, old_obj);
+            let lines = GetDIBits(
+                hdc_mem,
+                h_bitmap,
+                0,
+                height,
+                Some(buffer.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+
+            let _ = DeleteObject(h_bitmap);
+            let _ = DeleteDC(hdc_mem);
+            let _ = ReleaseDC(HWND(std::ptr::null_mut()), hdc_screen);
+
+            if blit.is_err() {
+                return Err("Failed to blit capture region".to_string());
+            }
+            if lines == 0 {
+                return Err("GetDIBits failed to extract pixel data".to_string());
+            }
+
+            for chunk in buffer.chunks_exact_mut(4) {
+                let b = chunk[0];
+                let r = chunk[2];
+                chunk[0] = r;
+                chunk[2] = b;
+                chunk[3] = 255;
+            }
+
+            Ok(ScreenSnapshot {
+                x,
+                y,
+                width,
+                height,
+                rgba_data: buffer,
+            })
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = (x, y, width, height);
             Err("Screen capture only supported on Windows".to_string())
         }
     }

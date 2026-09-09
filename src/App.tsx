@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { CaptureRecord } from "./types";
+import { CaptureRecord, ScrollingProgress } from "./types";
 import { Header } from "./components/Header";
 import { RecentWorkspace } from "./components/RecentWorkspace";
 import { EditorModal } from "./components/editor/EditorModal";
@@ -19,6 +19,9 @@ export default function App() {
   const [captureShortcut, setCaptureShortcut] = useState<string>("Alt+A");
   const [fullscreenShortcut, setFullscreenShortcut] = useState<string>("Ctrl+Shift+F");
   const [recordShortcut, setRecordShortcut] = useState<string>("Ctrl+Shift+R");
+  const [scrollingShortcut, setScrollingShortcut] = useState<string>("Ctrl+Shift+S");
+  const [isScrollingCaptureActive, setIsScrollingCaptureActive] = useState(false);
+  const [scrollingProgress, setScrollingProgress] = useState<ScrollingProgress | null>(null);
 
   // Screen recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -46,6 +49,7 @@ export default function App() {
           hotkeyCapture: string;
           hotkeyFullscreen?: string;
           hotkeyRecord?: string;
+          hotkeyScrolling?: string;
         }>("get_app_settings");
         if (settings?.hotkeyCapture) {
           setCaptureShortcut(settings.hotkeyCapture);
@@ -55,6 +59,9 @@ export default function App() {
         }
         if (settings?.hotkeyRecord) {
           setRecordShortcut(settings.hotkeyRecord);
+        }
+        if (settings?.hotkeyScrolling) {
+          setScrollingShortcut(settings.hotkeyScrolling);
         }
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -85,6 +92,20 @@ export default function App() {
       win.unminimize();
       win.setFocus();
     });
+    const unlistenCaptureErrorPromise = listen<string>("capture:error", (event) => {
+      window.alert(`Scroll Capture: ${event.payload}`);
+    });
+    const unlistenScrollingStartedPromise = listen("scrolling:started", () => {
+      setIsScrollingCaptureActive(true);
+      setScrollingProgress(null);
+    });
+    const unlistenScrollingProgressPromise = listen<ScrollingProgress>("scrolling:progress", (event) => {
+      setScrollingProgress(event.payload);
+    });
+    const unlistenScrollingFinishedPromise = listen("scrolling:finished", () => {
+      setIsScrollingCaptureActive(false);
+      setScrollingProgress(null);
+    });
 
     // Global shortcut Ctrl+N for new blank canvas
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -99,6 +120,10 @@ export default function App() {
       window.removeEventListener("focus", onWindowFocus);
       window.removeEventListener("keydown", handleGlobalKeyDown);
       unlistenCapturePromise.then((unlisten) => unlisten());
+      unlistenCaptureErrorPromise.then((unlisten) => unlisten());
+      unlistenScrollingStartedPromise.then((unlisten) => unlisten());
+      unlistenScrollingProgressPromise.then((unlisten) => unlisten());
+      unlistenScrollingFinishedPromise.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -381,7 +406,19 @@ export default function App() {
 
   const handleUpdateRecord = (updated: CaptureRecord) => {
     setCaptures((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-    setActiveEditorRecord(updated);
+    setActiveEditorRecord((current) => {
+      if (current?.id !== updated.id) return current;
+      setInitialMergeConfig(undefined);
+      return updated;
+    });
+  };
+
+  const handleTriggerScrollingCapture = async () => {
+    try {
+      await invoke(isScrollingCaptureActive ? "stop_scrolling_capture" : "trigger_scrolling_capture");
+    } catch (err) {
+      console.error("Failed to trigger scrolling capture:", err);
+    }
   };
 
   const handleMergeSelected = async (records: CaptureRecord[], layout: "horizontal" | "vertical" | "grid") => {
@@ -420,6 +457,7 @@ export default function App() {
       <Header
         onTriggerCapture={handleTriggerCapture}
         onTriggerFullscreenCapture={handleTriggerFullscreenCapture}
+        onTriggerScrollingCapture={handleTriggerScrollingCapture}
         onTriggerRecord={handleStartRecording}
         onNewBlankCanvas={handleNewBlankCanvas}
         onOpenSettings={() => setShowSettings(true)}
@@ -428,6 +466,9 @@ export default function App() {
         captureShortcut={captureShortcut}
         fullscreenShortcut={fullscreenShortcut}
         recordShortcut={recordShortcut}
+        scrollingShortcut={scrollingShortcut}
+        isScrollingCaptureActive={isScrollingCaptureActive}
+        scrollingProgress={scrollingProgress}
       />
 
       <main className="flex-1 flex overflow-hidden">
@@ -501,6 +542,7 @@ export default function App() {
             if (newSettings.hotkeyCapture) setCaptureShortcut(newSettings.hotkeyCapture);
             if (newSettings.hotkeyFullscreen) setFullscreenShortcut(newSettings.hotkeyFullscreen);
             if (newSettings.hotkeyRecord) setRecordShortcut(newSettings.hotkeyRecord);
+            if (newSettings.hotkeyScrolling) setScrollingShortcut(newSettings.hotkeyScrolling);
           }}
         />
       )}

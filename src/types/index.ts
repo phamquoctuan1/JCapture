@@ -179,8 +179,17 @@ export interface AppSettings {
   hotkeyCapture: string;
   hotkeyFullscreen?: string;
   hotkeyRecord: string;
+  hotkeyScrolling?: string;
   autoStartWithWindows: boolean;
   copyToClipboardOnCapture: boolean;
   openEditorOnCapture: boolean;
   saveDirectory: string;
+}
+
+/// Live stats emitted while a scrolling capture runs.
+export interface ScrollingProgress {
+  frames: number;
+  capturedHeight: number;
+  lastOffset: number;
+  similarity: number;
 }

@@ -1,5 +1,5 @@
 #[cfg(windows)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
     LoadCursorW, PostQuitMessage, RegisterClassW, SetCursor, ShowWindow,
-    TranslateMessage, HCURSOR, HICON, IDC_CROSS, SW_SHOW, SW_HIDE,
+    TranslateMessage, PostThreadMessageW, HCURSOR, HICON, IDC_CROSS, SW_SHOW, SW_HIDE, WM_USER,
     WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_PAINT, WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -25,14 +25,60 @@ use crate::storage::paths::AppPaths;
 use crate::storage::persistence::persist_capture;
 
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
+static OVERLAY_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
+static OVERLAY_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+#[cfg(windows)]
+const WM_CANCEL_OVERLAY: u32 = WM_USER + 202;
 
 #[inline]
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
 }
 
+/// A region the user picked for scrolling capture, plus the window that owns
+/// it.
+///
+/// Scrolling capture needs the rectangle itself, not a saved screenshot: the
+/// engine re-captures that rectangle many times and tracks the window to notice
+/// when it moves. Reporting it directly also removes the old brute force search
+/// that used to hunt the saved selection back down on screen.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectedRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    /// Raw HWND value of the window under the selection, or 0 when unknown.
+    pub target: isize,
+}
+
+pub type RegionCallback = Arc<dyn Fn(SelectedRegion) + Send + Sync + 'static>;
+
 pub fn is_overlay_open() -> bool {
     OVERLAY_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Requests cancellation of the active native selection overlay. The overlay
+/// owns its message loop, so a thread message wakes it immediately instead of
+/// waiting for another mouse or keyboard event.
+pub fn cancel_capture_overlay() {
+    #[cfg(windows)]
+    {
+        OVERLAY_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+        let thread_id = OVERLAY_THREAD_ID.load(Ordering::SeqCst);
+        if thread_id != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(
+                    thread_id,
+                    WM_CANCEL_OVERLAY,
+                    windows::Win32::Foundation::WPARAM(0),
+                    windows::Win32::Foundation::LPARAM(0),
+                );
+            }
+        }
+    }
 }
 
 pub fn open_capture_overlay(
@@ -40,9 +86,41 @@ pub fn open_capture_overlay(
     db: Arc<Database>,
     callback: Arc<dyn Fn(CaptureRecord) + Send + Sync + 'static>,
 ) -> Result<(), String> {
+    open_capture_overlay_with_cancel(paths, db, callback, Arc::new(|| {}))
+}
+
+pub fn open_capture_overlay_with_cancel(
+    paths: Arc<AppPaths>,
+    db: Arc<Database>,
+    callback: Arc<dyn Fn(CaptureRecord) + Send + Sync + 'static>,
+    on_cancel: Arc<dyn Fn() + Send + Sync + 'static>,
+) -> Result<(), String> {
+    open_overlay(paths, db, callback, on_cancel, None)
+}
+
+/// Opens the same selection overlay but reports the chosen rectangle instead of
+/// saving a capture.
+pub fn open_region_selection_overlay(
+    paths: Arc<AppPaths>,
+    db: Arc<Database>,
+    on_region: RegionCallback,
+    on_cancel: Arc<dyn Fn() + Send + Sync + 'static>,
+) -> Result<(), String> {
+    open_overlay(paths, db, Arc::new(|_| {}), on_cancel, Some(on_region))
+}
+
+fn open_overlay(
+    paths: Arc<AppPaths>,
+    db: Arc<Database>,
+    callback: Arc<dyn Fn(CaptureRecord) + Send + Sync + 'static>,
+    on_cancel: Arc<dyn Fn() + Send + Sync + 'static>,
+    region_callback: Option<RegionCallback>,
+) -> Result<(), String> {
     if OVERLAY_ACTIVE.swap(true, Ordering::SeqCst) {
         return Ok(()); // Already active
     }
+    #[cfg(windows)]
+    OVERLAY_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
         let _guard = ScopeExit::new(|| {
@@ -66,13 +144,18 @@ pub fn open_capture_overlay(
                     use std::io::Write;
                     let _ = writeln!(f, "[{}] Snapshot ERROR: {}", chrono::Local::now(), e);
                 });
+                (on_cancel)();
                 return;
             }
         };
 
         #[cfg(windows)]
         unsafe {
-            run_overlay_window(snapshot, paths, db, callback);
+            run_overlay_window(snapshot, paths, db, callback, on_cancel, region_callback);
+        }
+        #[cfg(not(windows))]
+        {
+            (on_cancel)();
         }
     });
 
@@ -99,6 +182,9 @@ struct OverlayState {
     paths: Arc<AppPaths>,
     db: Arc<Database>,
     callback: Arc<dyn Fn(CaptureRecord) + Send + Sync>,
+    on_cancel: Arc<dyn Fn() + Send + Sync>,
+    /// Set for scrolling capture: report the rectangle, save nothing.
+    region_callback: Option<RegionCallback>,
     is_dragging: bool,
     start_pt: POINT,
     current_pt: POINT,
@@ -112,6 +198,8 @@ unsafe fn run_overlay_window(
     paths: Arc<AppPaths>,
     db: Arc<Database>,
     callback: Arc<dyn Fn(CaptureRecord) + Send + Sync>,
+    on_cancel: Arc<dyn Fn() + Send + Sync>,
+    region_callback: Option<RegionCallback>,
 ) {
     let class_name = w!("JCapture_SelectionOverlay");
 
@@ -206,6 +294,8 @@ unsafe fn run_overlay_window(
         paths,
         db,
         callback,
+        on_cancel: Arc::clone(&on_cancel),
+        region_callback,
         is_dragging: false,
         start_pt: POINT { x: 0, y: 0 },
         current_pt: POINT { x: 0, y: 0 },
@@ -232,6 +322,7 @@ unsafe fn run_overlay_window(
         Ok(h) => h,
         Err(_) => {
             let _ = Box::from_raw(state_ptr);
+            (on_cancel)();
             return;
         }
     };
@@ -248,11 +339,26 @@ unsafe fn run_overlay_window(
     let _ = ShowWindow(hwnd, SW_SHOW);
     let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
 
+    OVERLAY_THREAD_ID.store(
+        windows::Win32::System::Threading::GetCurrentThreadId(),
+        Ordering::SeqCst,
+    );
+    if OVERLAY_CANCEL_REQUESTED.load(Ordering::SeqCst) {
+        (on_cancel)();
+        let _ = DestroyWindow(hwnd);
+    }
+
     let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
     while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).as_bool() {
+        if msg.message == WM_CANCEL_OVERLAY {
+            (on_cancel)();
+            let _ = DestroyWindow(hwnd);
+            break;
+        }
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    OVERLAY_THREAD_ID.store(0, Ordering::SeqCst);
 }
 
 #[cfg(windows)]
@@ -356,6 +462,9 @@ unsafe extern "system" fn overlay_wndproc(
         }
         WM_KEYDOWN => {
             if wparam.0 == 0x1B { // VK_ESCAPE
+                if !state_ptr.is_null() {
+                    ((*state_ptr).on_cancel)();
+                }
                 let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
                 let _ = DestroyWindow(hwnd);
             }
@@ -402,6 +511,41 @@ unsafe extern "system" fn overlay_wndproc(
 
                     let sel_w = (sel_right - sel_left) as u32;
                     let sel_h = (sel_bottom - sel_top) as u32;
+
+                    if let Some(report) = state.region_callback.clone() {
+                        // A scrolling capture needs a viewport, so a stray click
+                        // snaps to the window under the cursor instead of
+                        // producing a region too small to match.
+                        // Hidden first: both the window snap and the target
+                        // lookup below use WindowFromPoint, which would
+                        // otherwise just find this overlay.
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        let (region_x, region_y, region_w, region_h) = if sel_w >= 80 && sel_h >= 120 {
+                            (sel_left, sel_top, sel_w, sel_h)
+                        } else {
+                            let (x, y, w, h, _) = find_target_rect(pt, &state.snapshot, hwnd);
+                            (x, y, w, h)
+                        };
+                        let center = POINT {
+                            x: region_x + (region_w / 2) as i32,
+                            y: region_y + (region_h / 2) as i32,
+                        };
+                        let under = windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(center);
+                        let root = windows::Win32::UI::WindowsAndMessaging::GetAncestor(
+                            under,
+                            windows::Win32::UI::WindowsAndMessaging::GA_ROOT,
+                        );
+                        let target = if !root.0.is_null() { root } else { under };
+                        report(SelectedRegion {
+                            x: region_x,
+                            y: region_y,
+                            width: region_w,
+                            height: region_h,
+                            target: target.0 as isize,
+                        });
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
 
                     if sel_w >= 6 && sel_h >= 6 {
                         let _ = ShowWindow(hwnd, SW_HIDE);

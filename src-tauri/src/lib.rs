@@ -8,6 +8,7 @@ use tauri::{
 pub mod commands;
 pub mod models;
 pub mod native;
+pub mod scrolling;
 pub mod storage;
 
 use commands::*;
@@ -43,9 +44,10 @@ pub fn run() {
 
             // Setup System Tray
             let capture_item = MenuItem::with_id(app, "capture", "Capture Region (Ctrl+Shift+A)", true, None::<&str>)?;
+            let scroll_stop_item = MenuItem::with_id(app, "scroll-stop", "Stop Scrolling Capture", true, None::<&str>)?;
             let workspace_item = MenuItem::with_id(app, "workspace", "Recent Workspace", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Exit JCapture", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&capture_item, &workspace_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&capture_item, &scroll_stop_item, &workspace_item, &quit_item])?;
 
             let paths_for_tray = Arc::clone(&app_paths_clone);
             let db_for_tray = Arc::clone(&db_clone);
@@ -81,6 +83,9 @@ pub fn run() {
                                 let _ = window.unminimize();
                                 let _ = window.set_focus();
                             }
+                        }
+                        "scroll-stop" => {
+                            let _ = stop_scrolling_capture();
                         }
                         "quit" => {
                             app_handle.exit(0);
@@ -124,13 +129,17 @@ pub fn run() {
             let h_capture = handle_for_hotkey.clone();
             let h_fullscreen = handle_for_hotkey.clone();
             let h_record = handle_for_hotkey.clone();
+            let h_scrolling = handle_for_hotkey.clone();
             let paths_for_fullscreen = Arc::clone(&app_paths_clone);
             let db_for_fullscreen = Arc::clone(&db_clone);
+            let paths_for_scrolling = Arc::clone(&app_paths_clone);
+            let db_for_scrolling = Arc::clone(&db_clone);
 
             start_hotkey_listener(
                 initial_settings.hotkey_capture,
                 initial_settings.hotkey_fullscreen,
                 initial_settings.hotkey_record,
+                initial_settings.hotkey_scrolling,
                 Arc::new(move || {
                     let h = h_capture.clone();
                     let cb = Arc::new(move |record: CaptureRecord| {
@@ -203,6 +212,15 @@ pub fn run() {
                     }
                     let _ = h_record.emit("record:start", ());
                 }),
+                Arc::new(move || {
+                    let h = h_scrolling.clone();
+                    let paths = Arc::clone(&paths_for_scrolling);
+                    let db = Arc::clone(&db_for_scrolling);
+                    if let Err(error) = start_scrolling_capture(h.clone(), paths, db) {
+                        eprintln!("Scrolling capture hotkey failed: {}", error);
+                        let _ = h.emit("capture:error", error);
+                    }
+                }),
             );
 
             // Handle window close -> hide to tray instead of exiting
@@ -221,6 +239,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             trigger_capture,
             trigger_fullscreen_capture,
+            trigger_scrolling_capture,
+            stop_scrolling_capture,
             create_blank_canvas,
             get_recent_captures,
             toggle_pin_capture,
@@ -229,6 +249,7 @@ pub fn run() {
             save_annotation_project,
             load_annotation_project,
             read_image_base64,
+            update_capture_thumbnail,
             overwrite_capture_image,
             copy_image_base64_to_clipboard,
             open_in_explorer,

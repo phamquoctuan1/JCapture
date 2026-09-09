@@ -4,6 +4,10 @@ fn default_hotkey_fullscreen() -> String {
     "Ctrl+Shift+F".to_string()
 }
 
+fn default_hotkey_scrolling() -> String {
+    "Ctrl+Shift+S".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -11,6 +15,8 @@ pub struct AppSettings {
     #[serde(default = "default_hotkey_fullscreen")]
     pub hotkey_fullscreen: String,
     pub hotkey_record: String,
+    #[serde(default = "default_hotkey_scrolling")]
+    pub hotkey_scrolling: String,
     pub auto_start_with_windows: bool,
     pub copy_to_clipboard_on_capture: bool,
     pub open_editor_on_capture: bool,
@@ -23,6 +29,7 @@ impl Default for AppSettings {
             hotkey_capture: "Alt+A".to_string(),
             hotkey_fullscreen: "Ctrl+Shift+F".to_string(),
             hotkey_record: "Ctrl+Shift+R".to_string(),
+            hotkey_scrolling: "Ctrl+Shift+S".to_string(),
             auto_start_with_windows: false,
             copy_to_clipboard_on_capture: true,
             open_editor_on_capture: false,

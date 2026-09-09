@@ -1,10 +1,12 @@
 import React, { useState } from "react";
-import { Camera, Settings, Pin, Monitor, Minus, Square, X, PlusSquare, Video } from "lucide-react";
+import { Camera, Settings, Pin, Monitor, Minus, Square, X, PlusSquare, Video, PanelsTopLeft } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ScrollingProgress } from "../types";
 
 interface HeaderProps {
   onTriggerCapture: () => void;
   onTriggerFullscreenCapture: () => void;
+  onTriggerScrollingCapture: () => void;
   onTriggerRecord: () => void;
   onNewBlankCanvas: () => void;
   onOpenSettings: () => void;
@@ -13,11 +15,15 @@ interface HeaderProps {
   captureShortcut?: string;
   fullscreenShortcut?: string;
   recordShortcut?: string;
+  scrollingShortcut?: string;
+  isScrollingCaptureActive?: boolean;
+  scrollingProgress?: ScrollingProgress | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onTriggerCapture,
   onTriggerFullscreenCapture,
+  onTriggerScrollingCapture,
   onTriggerRecord,
   onNewBlankCanvas,
   onOpenSettings,
@@ -26,6 +32,9 @@ export const Header: React.FC<HeaderProps> = ({
   captureShortcut = "Alt+A",
   fullscreenShortcut = "Ctrl+Shift+F",
   recordShortcut = "Ctrl+Shift+R",
+  scrollingShortcut = "Ctrl+Shift+S",
+  isScrollingCaptureActive = false,
+  scrollingProgress = null,
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -105,6 +114,30 @@ export const Header: React.FC<HeaderProps> = ({
           <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-zinc-400 px-1 py-0.5 rounded font-mono">
             {fullscreenShortcut}
           </kbd>
+        </button>
+
+        <button
+          onClick={onTriggerScrollingCapture}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md hover:bg-zinc-700 active:bg-zinc-900 text-xs font-medium transition-all border ${
+            isScrollingCaptureActive
+              ? "bg-amber-500/20 text-amber-300 border-amber-500/60"
+              : "bg-zinc-800 text-cyan-300 border-zinc-700"
+          }`}
+          title={isScrollingCaptureActive
+            ? `Stop scrolling capture (${scrollingShortcut})`
+            : `Scrolling capture: bấm rồi kéo chọn vùng nội dung browser (${scrollingShortcut})`}
+        >
+          <PanelsTopLeft className="w-3.5 h-3.5" />
+          <span>{isScrollingCaptureActive ? "Stop" : "Scroll"}</span>
+          {isScrollingCaptureActive && scrollingProgress ? (
+            <span className="ml-0.5 text-[9px] text-amber-200/90 font-mono tabular-nums">
+              {scrollingProgress.frames}f · {scrollingProgress.capturedHeight.toLocaleString()}px
+            </span>
+          ) : (
+            <kbd className="ml-0.5 text-[9px] bg-zinc-900 text-cyan-300 px-1 py-0.5 rounded font-mono">
+              {scrollingShortcut}
+            </kbd>
+          )}
         </button>
 
         <button

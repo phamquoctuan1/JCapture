@@ -77,6 +77,13 @@ const PRESET_RECORD_SHORTCUTS = [
   "Alt+R",
 ];
 
+const PRESET_SCROLLING_SHORTCUTS = [
+  "Ctrl+Shift+S",
+  "Ctrl+Alt+S",
+  "F8",
+  "Alt+S",
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSettingsSaved,
@@ -85,6 +92,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     hotkeyCapture: "Alt+A",
     hotkeyFullscreen: "Ctrl+Shift+F",
     hotkeyRecord: "Ctrl+Shift+R",
+    hotkeyScrolling: "Ctrl+Shift+S",
     autoStartWithWindows: false,
     copyToClipboardOnCapture: true,
     openEditorOnCapture: false,
@@ -93,6 +101,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isRecordingCapture, setIsRecordingCapture] = useState(false);
   const [isRecordingFullscreen, setIsRecordingFullscreen] = useState(false);
   const [isRecordingRecord, setIsRecordingRecord] = useState(false);
+  const [isRecordingScrolling, setIsRecordingScrolling] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Update checking state
@@ -114,6 +123,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ...s,
           hotkeyFullscreen: s.hotkeyFullscreen || "Ctrl+Shift+F",
           hotkeyRecord: s.hotkeyRecord || "Ctrl+Shift+R",
+          hotkeyScrolling: s.hotkeyScrolling || "Ctrl+Shift+S",
         });
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -130,7 +140,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isRecordingCapture && !isRecordingFullscreen && !isRecordingRecord) return;
+    if (!isRecordingCapture && !isRecordingFullscreen && !isRecordingRecord && !isRecordingScrolling) return;
     e.preventDefault();
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
@@ -150,14 +160,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       } else if (isRecordingRecord) {
         setSettings((prev) => ({ ...prev, hotkeyRecord: combo }));
         setIsRecordingRecord(false);
+      } else if (isRecordingScrolling) {
+        setSettings((prev) => ({ ...prev, hotkeyScrolling: combo }));
+        setIsRecordingScrolling(false);
       }
     }
   };
 
   const handleSave = async () => {
     try {
-      await invoke("save_app_settings", { settings });
-      if (onSettingsSaved) onSettingsSaved(settings);
+      const normalizedSettings = {
+        ...settings,
+        hotkeyScrolling: settings.hotkeyScrolling?.trim() || "Ctrl+Shift+S",
+      };
+      await invoke("save_app_settings", { settings: normalizedSettings });
+      if (onSettingsSaved) onSettingsSaved(normalizedSettings);
       setSaved(true);
       setTimeout(() => {
         setSaved(false);
@@ -424,6 +441,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
                       (settings.hotkeyRecord || "Ctrl+Shift+R") === preset
                         ? "bg-sky-600 text-white font-semibold"
+                        : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Scrolling Capture Hotkey */}
+            <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-300">Scrolling Capture Shortcut:</span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={settings.hotkeyScrolling || "Ctrl+Shift+S"}
+                    onChange={(e) => setSettings({ ...settings, hotkeyScrolling: e.target.value })}
+                    className="w-32 bg-zinc-900 border border-zinc-700 px-2 py-1 rounded text-cyan-400 font-mono text-xs text-center focus:outline-none focus:border-cyan-500"
+                    placeholder="e.g. Ctrl+Shift+S"
+                  />
+                  <button
+                    onClick={() => setIsRecordingScrolling(!isRecordingScrolling)}
+                    className={`px-2.5 py-1 rounded font-mono font-semibold text-xs transition-all ${
+                      isRecordingScrolling
+                        ? "bg-amber-500 text-black ring-2 ring-amber-400 animate-pulse"
+                        : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                    }`}
+                    title="Click then press any key combination on keyboard"
+                  >
+                    {isRecordingScrolling ? "Press key..." : "Record"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-1 flex flex-wrap gap-1 items-center">
+                <span className="text-[10px] text-zinc-400 mr-1">Presets:</span>
+                {PRESET_SCROLLING_SHORTCUTS.map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      setSettings({ ...settings, hotkeyScrolling: preset });
+                      setIsRecordingScrolling(false);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                      (settings.hotkeyScrolling || "Ctrl+Shift+S") === preset
+                        ? "bg-cyan-600 text-white font-semibold"
                         : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
                     }`}
                   >

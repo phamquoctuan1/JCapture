@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{AppSettings, CaptureRecord};
-use crate::native::{copy_rgba_to_clipboard, open_capture_overlay};
+use crate::native::{
+    copy_rgba_to_clipboard, is_overlay_open, open_capture_overlay, open_region_selection_overlay,
+    SelectedRegion,
+};
 use crate::storage::{read_project_json, save_project_json, AppPaths, Database};
 
 pub struct AppState {
@@ -226,6 +229,231 @@ pub fn read_image_base64(file_path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+static SCROLLING_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SCROLLING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub async fn trigger_scrolling_capture(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    start_scrolling_capture(app, Arc::clone(&state.paths), Arc::clone(&state.db))
+}
+
+#[tauri::command]
+pub fn stop_scrolling_capture() -> Result<(), String> {
+    SCROLLING_STOP_REQUESTED.store(true, Ordering::SeqCst);
+    if SCROLLING_ACTIVE.load(Ordering::SeqCst) {
+        crate::native::cancel_capture_overlay();
+    }
+    Ok(())
+}
+
+/// Starts the scrolling capture flow from either the frontend command or a
+/// native global hotkey.
+///
+/// The selection overlay reports the chosen rectangle and the window that owns
+/// it, then the worker thread hands both to the scrolling capture engine. The
+/// engine measures every scroll from the captured pixels, so nothing here needs
+/// to know how far the target actually scrolls.
+pub fn start_scrolling_capture(
+    app: AppHandle,
+    paths: Arc<AppPaths>,
+    db: Arc<Database>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    // Pressing the scrolling shortcut or button again while a capture is in
+    // progress is a convenient Stop action. This also prevents overlapping
+    // workers from racing to persist multiple stitched images.
+    if SCROLLING_ACTIVE.load(Ordering::SeqCst) {
+        SCROLLING_STOP_REQUESTED.store(true, Ordering::SeqCst);
+        crate::native::cancel_capture_overlay();
+        return Ok(());
+    }
+    if is_overlay_open() {
+        return Ok(());
+    }
+    SCROLLING_STOP_REQUESTED.store(false, Ordering::SeqCst);
+    SCROLLING_ACTIVE.store(true, Ordering::SeqCst);
+    let app_handle = app.clone();
+    let _ = app_handle.emit("scrolling:started", ());
+    // Hide the workspace so the selection overlay exposes the window behind it.
+    // A watchdog below restores the window when the user cancels or the native
+    // overlay fails before invoking the callback.
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    let selection_completed = Arc::new(AtomicBool::new(false));
+    let callback_app_handle = app_handle.clone();
+    let callback_paths = Arc::clone(&paths);
+    let callback_db = Arc::clone(&db);
+    let callback_selection_completed = Arc::clone(&selection_completed);
+    let on_region = Arc::new(move |region: SelectedRegion| {
+        callback_selection_completed.store(true, Ordering::SeqCst);
+        let app_handle = callback_app_handle.clone();
+        let paths = Arc::clone(&callback_paths);
+        let db = Arc::clone(&callback_db);
+        std::thread::spawn(move || {
+            // Let the native selection overlay finish hiding before the first
+            // frame is grabbed, otherwise it lands in the stitched image.
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            match run_scrolling_capture(&app_handle, &paths, &db, region) {
+                Ok(record) => {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                        let _ = window.emit("capture:new", &record);
+                    }
+                    let _ = app_handle.emit("capture:new", &record);
+                }
+                Err(error) => {
+                    if SCROLLING_STOP_REQUESTED.load(Ordering::SeqCst) {
+                        eprintln!("Scrolling capture stopped: {}", error);
+                    } else {
+                        eprintln!("Scrolling capture failed: {}", error);
+                        let _ = app_handle.emit("capture:error", error);
+                    }
+                }
+            }
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            SCROLLING_ACTIVE.store(false, Ordering::SeqCst);
+            let _ = app_handle.emit("scrolling:finished", ());
+        });
+    });
+    let cancel_stop = Arc::new(|| {
+        SCROLLING_STOP_REQUESTED.store(true, Ordering::SeqCst);
+    });
+    let result = open_region_selection_overlay(paths, db, on_region, cancel_stop);
+    if result.is_err() {
+        SCROLLING_ACTIVE.store(false, Ordering::SeqCst);
+        let _ = app_handle.emit("scrolling:finished", ());
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    } else {
+        let watchdog_app = app_handle.clone();
+        std::thread::spawn(move || {
+            while is_overlay_open() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if !selection_completed.load(Ordering::SeqCst) {
+                SCROLLING_ACTIVE.store(false, Ordering::SeqCst);
+                let _ = watchdog_app.emit("scrolling:finished", ());
+                if let Some(window) = watchdog_app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+        });
+    }
+    result
+}
+
+/// Smallest region the matcher can work with. Below this there is not enough
+/// texture in the 20%-80% band to measure a scroll offset reliably.
+const MIN_SCROLL_REGION_WIDTH: u32 = 120;
+const MIN_SCROLL_REGION_HEIGHT: u32 = 160;
+
+#[cfg(windows)]
+fn run_scrolling_capture(
+    app: &AppHandle,
+    paths: &AppPaths,
+    db: &Database,
+    region: SelectedRegion,
+) -> Result<CaptureRecord, String> {
+    use crate::scrolling::{
+        CaptureLogger, CaptureRegion, DesktopRegionCapture, EngineConfig, InputScrollController,
+        ScrollingCaptureEngine,
+    };
+    use windows::Win32::Foundation::HWND;
+
+    if region.width < MIN_SCROLL_REGION_WIDTH || region.height < MIN_SCROLL_REGION_HEIGHT {
+        return Err(format!(
+            "Vùng chọn quá nhỏ để cuộn (tối thiểu {}x{} px)",
+            MIN_SCROLL_REGION_WIDTH, MIN_SCROLL_REGION_HEIGHT
+        ));
+    }
+
+    let capture_region = CaptureRegion {
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height,
+    };
+    let target = HWND(region.target as *mut std::ffi::c_void);
+    let service = DesktopRegionCapture::new(capture_region, target);
+    let mut scroll = InputScrollController::new(target, capture_region.center());
+    let logger = CaptureLogger::new(&paths.root_dir.join("scrolling-capture.log"));
+    let mut engine = ScrollingCaptureEngine::new(EngineConfig::default(), logger);
+
+    let progress_app = app.clone();
+    let output = engine.run(
+        &service,
+        &mut scroll,
+        &|| SCROLLING_STOP_REQUESTED.load(Ordering::SeqCst),
+        &move |progress| {
+            let _ = progress_app.emit(
+                "scrolling:progress",
+                serde_json::json!({
+                    "frames": progress.frames,
+                    "capturedHeight": progress.captured_rows,
+                    "lastOffset": progress.last_offset,
+                    "similarity": progress.similarity,
+                }),
+            );
+        },
+    )?;
+
+    let capture_id = uuid::Uuid::new_v4().to_string();
+    let record = crate::storage::persist_capture(
+        db,
+        paths,
+        &capture_id,
+        "scrolling",
+        output.width,
+        output.height,
+        &output.rgba,
+    )?;
+    let _ = copy_rgba_to_clipboard(output.width, output.height, &output.rgba);
+    Ok(record)
+}
+
+#[cfg(not(windows))]
+fn run_scrolling_capture(
+    _app: &AppHandle,
+    _paths: &AppPaths,
+    _db: &Database,
+    _region: SelectedRegion,
+) -> Result<CaptureRecord, String> {
+    Err("Scrolling capture is only supported on Windows".into())
+}
+
+#[tauri::command]
+pub fn update_capture_thumbnail(
+    state: State<'_, AppState>,
+    id: String,
+    base64_data: String,
+) -> Result<CaptureRecord, String> {
+    let record = state.db.get_capture_by_id(&id)?
+        .ok_or_else(|| "Capture not found".to_string())?;
+    let raw_b64 = base64_data.split_once(',').map(|(_, data)| data).unwrap_or(&base64_data);
+    let bytes = base64_decode(raw_b64)?;
+    let image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    image.thumbnail(480, 320)
+        .save(&record.thumbnail_path)
+        .map_err(|e| e.to_string())?;
+    state.db.get_capture_by_id(&id)?
+        .ok_or_else(|| "Capture not found after thumbnail update".to_string())
+}
+
 #[tauri::command]
 pub fn copy_image_base64_to_clipboard(base64_data: String) -> Result<(), String> {
     // Strip data:image/...;base64, if present
@@ -246,13 +474,17 @@ pub fn open_in_explorer(file_path: String) -> Result<(), String> {
     #[cfg(windows)]
     {
         let path = std::path::Path::new(&file_path);
-        let arg = if path.exists() {
-            format!("/select,\"{}\"", file_path)
+        let mut command = std::process::Command::new("explorer.exe");
+        if path.is_file() {
+            let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            // Command handles paths containing spaces. Embedded quote characters
+            // become literal and prevent Explorer from selecting the target.
+            command.arg(format!("/select,{}", resolved.to_string_lossy()));
         } else {
-            format!("\"{}\"", path.parent().unwrap_or(path).to_string_lossy())
-        };
-        std::process::Command::new("explorer")
-            .arg(arg)
+            let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+            command.arg(folder);
+        }
+        command
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -278,9 +510,12 @@ pub fn save_app_settings(
     settings: Option<AppSettings>,
     new_settings: Option<AppSettings>,
 ) -> Result<(), String> {
-    let final_settings = settings
+    let mut final_settings = settings
         .or(new_settings)
         .ok_or_else(|| "Missing settings argument".to_string())?;
+    if final_settings.hotkey_scrolling.trim().is_empty() {
+        final_settings.hotkey_scrolling = "Ctrl+Shift+S".to_string();
+    }
 
     let json_str = serde_json::to_string(&final_settings).map_err(|e| e.to_string())?;
     state.db.set_setting("app_settings", &json_str)?;
@@ -288,6 +523,7 @@ pub fn save_app_settings(
         &final_settings.hotkey_capture,
         &final_settings.hotkey_fullscreen,
         &final_settings.hotkey_record,
+        &final_settings.hotkey_scrolling,
     );
     println!("[JCapture] App settings saved successfully: {:?}", final_settings);
     Ok(())

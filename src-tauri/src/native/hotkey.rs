@@ -17,10 +17,11 @@ use parking_lot::Mutex;
 pub const HOTKEY_ID_CAPTURE: i32 = 1001;
 pub const HOTKEY_ID_RECORD: i32 = 1002;
 pub const HOTKEY_ID_FULLSCREEN: i32 = 1003;
+pub const HOTKEY_ID_SCROLLING: i32 = 1004;
 const WM_RELOAD_HOTKEYS: u32 = WM_USER + 101;
 
 lazy_static! {
-    static ref HOTKEY_SENDER: Mutex<Option<(Sender<(String, String, String)>, u32)>> = Mutex::new(None);
+    static ref HOTKEY_SENDER: Mutex<Option<(Sender<(String, String, String, String)>, u32)>> = Mutex::new(None);
 }
 
 pub fn parse_hotkey(s: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
@@ -63,13 +64,19 @@ pub fn parse_hotkey(s: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
     vk.map(|k| (HOT_KEY_MODIFIERS(mods), k))
 }
 
-pub fn update_global_hotkeys(capture_shortcut: &str, fullscreen_shortcut: &str, record_shortcut: &str) {
+pub fn update_global_hotkeys(
+    capture_shortcut: &str,
+    fullscreen_shortcut: &str,
+    record_shortcut: &str,
+    scrolling_shortcut: &str,
+) {
     let lock = HOTKEY_SENDER.lock();
     if let Some((ref sender, thread_id)) = *lock {
         let _ = sender.send((
             capture_shortcut.to_string(),
             fullscreen_shortcut.to_string(),
             record_shortcut.to_string(),
+            scrolling_shortcut.to_string(),
         ));
         #[cfg(windows)]
         unsafe {
@@ -82,11 +89,13 @@ pub fn start_hotkey_listener(
     initial_capture: String,
     initial_fullscreen: String,
     initial_record: String,
+    initial_scrolling: String,
     on_capture_press: Arc<dyn Fn() + Send + Sync + 'static>,
     on_fullscreen_press: Arc<dyn Fn() + Send + Sync + 'static>,
     on_record_press: Arc<dyn Fn() + Send + Sync + 'static>,
+    on_scrolling_press: Arc<dyn Fn() + Send + Sync + 'static>,
 ) {
-    let (tx, rx) = channel::<(String, String, String)>();
+    let (tx, rx) = channel::<(String, String, String, String)>();
 
     std::thread::spawn(move || {
         #[cfg(windows)]
@@ -100,11 +109,13 @@ pub fn start_hotkey_listener(
             let mut current_cap = initial_capture;
             let mut current_full = initial_fullscreen;
             let mut current_rec = initial_record;
+            let mut current_scroll = initial_scrolling;
 
-            let register_keys = |cap: &str, full: &str, rec: &str| {
+            let register_keys = |cap: &str, full: &str, rec: &str, scroll: &str| {
                 let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE);
                 let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_FULLSCREEN);
                 let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_RECORD);
+                let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_SCROLLING);
 
                 // 1. Try registering user capture hotkey
                 if let Some((mods, vk)) = parse_hotkey(cap) {
@@ -137,9 +148,18 @@ pub fn start_hotkey_listener(
                         println!("Successfully registered record hotkey: {}", rec);
                     }
                 }
+
+                // 4. Try registering user scrolling capture hotkey
+                if let Some((mods, vk)) = parse_hotkey(scroll) {
+                    if let Err(e) = RegisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_SCROLLING, mods, vk) {
+                        eprintln!("Warning: Failed to register scrolling hotkey '{}': {}", scroll, e);
+                    } else {
+                        println!("Successfully registered scrolling hotkey: {}", scroll);
+                    }
+                }
             };
 
-            register_keys(&current_cap, &current_full, &current_rec);
+            register_keys(&current_cap, &current_full, &current_rec, &current_scroll);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).as_bool() {
@@ -151,14 +171,17 @@ pub fn start_hotkey_listener(
                         on_fullscreen_press();
                     } else if id == HOTKEY_ID_RECORD {
                         on_record_press();
+                    } else if id == HOTKEY_ID_SCROLLING {
+                        on_scrolling_press();
                     }
                 } else if msg.message == WM_RELOAD_HOTKEYS {
-                    while let Ok((new_cap, new_full, new_rec)) = rx.try_recv() {
+                    while let Ok((new_cap, new_full, new_rec, new_scroll)) = rx.try_recv() {
                         current_cap = new_cap;
                         current_full = new_full;
                         current_rec = new_rec;
+                        current_scroll = new_scroll;
                     }
-                    register_keys(&current_cap, &current_full, &current_rec);
+                    register_keys(&current_cap, &current_full, &current_rec, &current_scroll);
                 }
 
                 let _ = TranslateMessage(&msg);
@@ -168,6 +191,7 @@ pub fn start_hotkey_listener(
             let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_CAPTURE);
             let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_FULLSCREEN);
             let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_RECORD);
+            let _ = UnregisterHotKey(HWND(std::ptr::null_mut()), HOTKEY_ID_SCROLLING);
         }
     });
 }
