@@ -149,12 +149,15 @@ const calculateAutoLayout = (
       const row = Math.floor(idx / maxCols);
       const x = padding + col * (cellW + gap);
       const y = padding + row * (cellH + gap);
+      const scale = Math.min(cellW / (img.width || 1), cellH / (img.height || 1));
+      const fittedW = Math.max(1, Math.round(img.width * scale));
+      const fittedH = Math.max(1, Math.round(img.height * scale));
       return {
         ...img,
-        x,
-        y,
-        width: cellW,
-        height: cellH,
+        x: x + Math.round((cellW - fittedW) / 2),
+        y: y + Math.round((cellH - fittedH) / 2),
+        width: fittedW,
+        height: fittedH,
       };
     });
     const totalCols = Math.min(imgObjs.length, maxCols);
@@ -270,9 +273,23 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const originalDataUrlRef = useRef<string>("");
   const currentBgSrcRef = useRef<string>("");
 
+  const createWhiteBackground = useCallback((width: number, height: number) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(width));
+    canvas.height = Math.max(1, Math.ceil(height));
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    return canvas.toDataURL("image/png");
+  }, []);
+
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const [exported, setExported] = useState(false);
+  const [pendingPasteSrc, setPendingPasteSrc] = useState<string | null>(null);
+  const [livePreviewSrc, setLivePreviewSrc] = useState<string>("");
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -290,6 +307,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
   const startPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const currentTempObjectRef = useRef<AnnotationObject | null>(null);
   const internalCopiedObjectRef = useRef<AnnotationObject | null>(null);
+  const lastAutoSavedJsonRef = useRef<string>("");
 
   // 1. Load Background Image & Project Annotations
   useEffect(() => {
@@ -299,6 +317,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     setIsCropMode(false);
     setCropRect(null);
     setIsCropped(false);
+    lastAutoSavedJsonRef.current = "";
 
     const loadData = async () => {
       try {
@@ -314,7 +333,11 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             setBgImage(img);
             originalDataUrlRef.current = dataUrl;
             currentBgSrcRef.current = dataUrl;
-            setCanvasDim({ width: img.naturalWidth, height: img.naturalHeight });
+            // Merge workspaces calculate their own dimensions from the laid-out
+            // overlays; don't let the blank source image overwrite that layout.
+            if (!initialMerge) {
+              setCanvasDim({ width: img.naturalWidth, height: img.naturalHeight });
+            }
           }
         };
 
@@ -359,18 +382,43 @@ export const EditorModal: React.FC<EditorModalProps> = ({
           });
           const project: AnnotationProject = JSON.parse(jsonStr);
           if (isMounted && project.objects) {
-            setObjects(project.objects);
+            const hasEditableBackground = project.objects.some((obj) => obj.type === "image" && obj.id.startsWith("img_background_"));
+            const isExistingMerge = project.objects.some((obj) => obj.type === "image");
+            const editableObjects: AnnotationObject[] = !hasEditableBackground && isExistingMerge && record.captureType !== "blank"
+              ? [{
+                  id: `img_background_${record.id}`,
+                  type: "image",
+                  x: 0,
+                  y: 0,
+                  width: img.naturalWidth || record.width || project.canvasWidth || 800,
+                  height: img.naturalHeight || record.height || project.canvasHeight || 600,
+                  src: dataUrl,
+                } as ImageOverlayObject, ...project.objects]
+              : project.objects;
+            const usesEditableBackground = hasEditableBackground || (!hasEditableBackground && isExistingMerge && record.captureType !== "blank");
+            const projectBgSrc = usesEditableBackground
+              ? createWhiteBackground(project.canvasWidth || 800, project.canvasHeight || 600)
+              : dataUrl;
+            if (usesEditableBackground) {
+              const whiteBg = new Image();
+              whiteBg.src = projectBgSrc;
+              whiteBg.onload = () => {
+                if (isMounted) setBgImage(whiteBg);
+              };
+              currentBgSrcRef.current = projectBgSrc;
+            }
+            setObjects(editableObjects);
             setHistory([
               {
-                objects: project.objects,
-                bgSrc: dataUrl,
+                objects: editableObjects,
+                bgSrc: projectBgSrc,
                 canvasWidth: project.canvasWidth || 800,
                 canvasHeight: project.canvasHeight || 600,
               },
             ]);
             setHistoryIndex(0);
 
-            for (const obj of project.objects) {
+            for (const obj of editableObjects) {
               if (obj.type === "image" && !overlayImageCache.has(obj.src)) {
                 const overlayImg = new Image();
                 overlayImg.src = obj.src;
@@ -378,7 +426,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               }
             }
 
-            const maxStep = project.objects
+            const maxStep = editableObjects
               .filter((o): o is import("../../types").StepBadgeObject => o.type === "stepBadge")
               .reduce((max, obj) => Math.max(max, obj.number), 0);
             setStepCounter(maxStep + 1);
@@ -405,7 +453,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [record.id, record.originalPath, record.projectPath, record.width, record.height]);
+  }, [record.id, record.originalPath, record.projectPath, record.width, record.height, createWhiteBackground, initialMerge]);
 
   // Push new state to undo/redo history
   const pushState = useCallback((newObjects: AnnotationObject[], newBgSrc?: string, newDim?: { width: number; height: number }) => {
@@ -522,6 +570,35 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     pushState(objects, undefined, { width: newW, height: newH });
   };
 
+  const fitCanvasToContent = (contentObjects: AnnotationObject[] = objects) => {
+    const workspaceOnly = !!initialMerge || record.captureType === "blank";
+    let maxR = workspaceOnly ? 300 : (bgImage?.naturalWidth || 300);
+    let maxB = workspaceOnly ? 200 : (bgImage?.naturalHeight || 200);
+    for (const obj of contentObjects) {
+      const bounds = getObjectBoundingBox(obj);
+      maxR = Math.max(maxR, Math.ceil(bounds.maxX) + 40);
+      maxB = Math.max(maxB, Math.ceil(bounds.maxY) + 40);
+    }
+    const nextDim = { width: Math.max(300, maxR), height: Math.max(200, maxB) };
+    setCanvasDim(nextDim);
+    return nextDim;
+  };
+
+  const normalizeObjectsIntoCanvas = (contentObjects: AnnotationObject[]) => {
+    if (contentObjects.length === 0) return contentObjects;
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const obj of contentObjects) {
+      const bounds = getObjectBoundingBox(obj);
+      minX = Math.min(minX, bounds.minX);
+      minY = Math.min(minY, bounds.minY);
+    }
+    const dx = minX < 0 ? Math.ceil(-minX) + 40 : 0;
+    const dy = minY < 0 ? Math.ceil(-minY) + 40 : 0;
+    if (!dx && !dy) return contentObjects;
+    return contentObjects.map((obj) => moveObjectFromOrigin(obj, dx, dy));
+  };
+
   // Smart Auto-Layout for Image Overlays (Side-by-Side, Vertical, Grid)
   const handleAutoLayout = (layout: "horizontal" | "vertical" | "grid") => {
     const imgObjs = objects.filter((o): o is ImageOverlayObject => o.type === "image");
@@ -532,15 +609,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     const nextObjects = [...nonImgObjs, ...laidOutObjects];
     setCanvasDim(newDim);
     pushState(nextObjects, undefined, newDim);
-  };
-
-  const handleAlignSelectedImage = (horizontal: "left" | "center" | "right", vertical: "top" | "middle" | "bottom") => {
-    if (!selectedId) return;
-    const selected = objects.find((obj): obj is ImageOverlayObject => obj.id === selectedId && obj.type === "image");
-    if (!selected) return;
-    const x = horizontal === "left" ? 0 : horizontal === "center" ? Math.round((canvasDim.width - selected.width) / 2) : Math.max(0, canvasDim.width - selected.width);
-    const y = vertical === "top" ? 0 : vertical === "middle" ? Math.round((canvasDim.height - selected.height) / 2) : Math.max(0, canvasDim.height - selected.height);
-    pushState(objects.map((obj) => obj.id === selectedId ? { ...obj, x, y } : obj));
   };
 
   // Revert back to original uncropped image
@@ -560,7 +628,23 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
   const handleZoomIn = () => setZoomLevel((z) => Math.min(4.0, Number((z + 0.25).toFixed(2))));
   const handleZoomOut = () => setZoomLevel((z) => Math.max(0.25, Number((z - 0.25).toFixed(2))));
-  const handleZoomReset = () => setZoomLevel(1.0);
+  const handleFitToViewport = useCallback(() => {
+    const viewport = containerRef.current;
+    if (!viewport || !canvasDim.width || !canvasDim.height) return;
+    const availableWidth = Math.max(240, viewport.clientWidth - 64);
+    const availableHeight = Math.max(180, viewport.clientHeight - 64);
+    const fit = Math.min(1, availableWidth / canvasDim.width, availableHeight / canvasDim.height);
+    setZoomLevel(Number(Math.max(0.25, fit).toFixed(2)));
+  }, [canvasDim.width, canvasDim.height]);
+
+  useEffect(() => {
+    handleFitToViewport();
+    const viewport = containerRef.current;
+    if (!viewport) return;
+    const observer = new ResizeObserver(handleFitToViewport);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [handleFitToViewport]);
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
@@ -647,6 +731,52 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [bgImage, record, canvasDim, objects, onUpdateRecord]);
 
+  // Persist the editable project shortly after a merge/edit settles. This
+  // keeps the vector objects and layout without doing disk I/O on every mouse
+  // move while an object is being dragged or resized.
+  useEffect(() => {
+    if (!bgImage || objects.length === 0) return;
+    const timer = window.setTimeout(async () => {
+      const project: AnnotationProject = {
+        version: 1,
+        captureId: record.id,
+        canvasWidth: canvasDim.width,
+        canvasHeight: canvasDim.height,
+        objects,
+      };
+      const jsonContent = JSON.stringify(project, null, 2);
+      if (jsonContent === lastAutoSavedJsonRef.current) return;
+      try {
+        const projectPath = await invoke<string>("save_annotation_project", {
+          captureId: record.id,
+          jsonContent,
+        });
+        const previewCanvas = document.createElement("canvas");
+        previewCanvas.width = canvasDim.width;
+        previewCanvas.height = canvasDim.height;
+        const previewCtx = previewCanvas.getContext("2d");
+        if (previewCtx) {
+          previewCtx.fillStyle = "#FFFFFF";
+          previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+          previewCtx.drawImage(bgImage, 0, 0);
+          for (const obj of objects) drawAnnotationObject(previewCtx, obj, bgImage);
+          const updatedRecord = await invoke<CaptureRecord>("update_capture_thumbnail", {
+            id: record.id,
+            base64Data: previewCanvas.toDataURL("image/jpeg", 0.82),
+          });
+          lastAutoSavedJsonRef.current = jsonContent;
+          onUpdateRecord({ ...updatedRecord, projectPath });
+        } else if (record.projectPath !== projectPath) {
+          lastAutoSavedJsonRef.current = jsonContent;
+          onUpdateRecord({ ...record, projectPath });
+        }
+      } catch (err) {
+        console.error("Failed to auto-save project:", err);
+      }
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [bgImage, objects, canvasDim.width, canvasDim.height, record, onUpdateRecord]);
+
   // Insert image overlay onto canvas with auto-expansion if needed
   const insertImageOverlay = useCallback(async (filePathOrBase64: string, dropX?: number, dropY?: number) => {
     let base64Data = filePathOrBase64;
@@ -664,23 +794,40 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     img.onload = () => {
       overlayImageCache.set(base64Data, img);
 
+      const hasEditableBackground = objects.some((obj) => obj.type === "image" && obj.id.startsWith("img_background_"));
+      const shouldPromoteBackground = !initialMerge && record.captureType !== "blank" && !hasEditableBackground && !!bgImage;
+      let nextObjects = objects;
+      let nextBgSrc: string | undefined;
+      if (shouldPromoteBackground) {
+        const backgroundObject: ImageOverlayObject = {
+          id: `img_background_${record.id}`,
+          type: "image",
+          x: 0,
+          y: 0,
+          width: bgImage.naturalWidth || canvasDim.width,
+          height: bgImage.naturalHeight || canvasDim.height,
+          src: currentBgSrcRef.current,
+        };
+        overlayImageCache.set(backgroundObject.src, bgImage);
+        nextObjects = [backgroundObject, ...objects];
+        nextBgSrc = createWhiteBackground(canvasDim.width, canvasDim.height);
+        const whiteBg = new Image();
+        whiteBg.src = nextBgSrc;
+        whiteBg.onload = () => setBgImage(whiteBg);
+        currentBgSrcRef.current = nextBgSrc;
+      }
+
       // Default size
       let w = img.naturalWidth || 300;
       let h = img.naturalHeight || 200;
-      const maxDim = 450;
-      if (w > maxDim || h > maxDim) {
-        const ratio = Math.min(maxDim / w, maxDim / h);
-        w = Math.round(w * ratio);
-        h = Math.round(h * ratio);
-      }
-
-      let curW = canvasDim.width;
-      let curH = canvasDim.height;
+      const emptyWorkspace = record.captureType === "blank" && objects.length === 0;
+      let curW = emptyWorkspace ? Math.max(300, w + 80) : canvasDim.width;
+      let curH = emptyWorkspace ? Math.max(200, h + 80) : canvasDim.height;
 
       // Keep inserted images fully inside the canvas; expansion below handles
       // images that are larger than the original workspace.
-      let posX = Math.max(0, dropX !== undefined ? dropX : Math.round((curW - w) / 2));
-      let posY = Math.max(0, dropY !== undefined ? dropY : Math.round((curH - h) / 2));
+      let posX = dropX !== undefined ? dropX : (emptyWorkspace ? 40 : Math.round((curW - w) / 2));
+      let posY = dropY !== undefined ? dropY : (emptyWorkspace ? 40 : Math.round((curH - h) / 2));
 
       // Expand canvas if dropped outside
       let nextW = curW;
@@ -699,17 +846,49 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         src: base64Data,
       };
 
-      if (nextW !== curW || nextH !== curH) {
+      const normalizedObjects = normalizeObjectsIntoCanvas([...nextObjects, imgObj]);
+      for (const normalizedObject of normalizedObjects) {
+        const normalizedBounds = getObjectBoundingBox(normalizedObject);
+        nextW = Math.max(nextW, Math.ceil(normalizedBounds.maxX) + 40);
+        nextH = Math.max(nextH, Math.ceil(normalizedBounds.maxY) + 40);
+      }
+      if (nextW !== curW || nextH !== curH || normalizedObjects !== nextObjects) {
         setCanvasDim({ width: nextW, height: nextH });
-        pushState([...objects, imgObj], undefined, { width: nextW, height: nextH });
+        pushState(normalizedObjects, nextBgSrc, { width: nextW, height: nextH });
       } else {
-        pushState([...objects, imgObj]);
+        pushState(normalizedObjects, nextBgSrc);
       }
 
       setSelectedId(newId);
       setActiveTool("select");
+      setPendingPasteSrc(null);
     };
-  }, [objects, canvasDim, pushState]);
+  }, [objects, canvasDim, pushState, initialMerge, record.captureType, record.id, bgImage, createWhiteBackground]);
+
+  const placePendingPaste = (position: "left" | "right" | "top" | "bottom") => {
+    if (!pendingPasteSrc) return;
+    const img = new Image();
+    img.src = pendingPasteSrc;
+    img.onload = () => {
+      const occupied = [
+        ...((!initialMerge && record.captureType !== "blank") ? [{ x: 0, y: 0, width: bgImage?.naturalWidth || canvasDim.width, height: bgImage?.naturalHeight || canvasDim.height }] : []),
+        ...objects.filter((obj): obj is ImageOverlayObject => obj.type === "image"),
+      ];
+      if (occupied.length === 0) {
+        occupied.push({ x: 0, y: 0, width: canvasDim.width, height: canvasDim.height });
+      }
+      const minX = Math.min(...occupied.map((box) => box.x));
+      const minY = Math.min(...occupied.map((box) => box.y));
+      const maxX = Math.max(...occupied.map((box) => box.x + box.width));
+      const maxY = Math.max(...occupied.map((box) => box.y + box.height));
+      const centerX = minX + (maxX - minX - img.naturalWidth) / 2;
+      const centerY = minY + (maxY - minY - img.naturalHeight) / 2;
+      const gap = 20;
+      const x = Math.round(position === "left" ? minX - img.naturalWidth - gap : position === "right" ? maxX + gap : centerX);
+      const y = Math.round(position === "top" ? minY - img.naturalHeight - gap : position === "bottom" ? maxY + gap : centerY);
+      insertImageOverlay(pendingPasteSrc, x, y);
+    };
+  };
 
   // Global Pointer Drag & Drop for Bottom Dock Thumbnails (100% Reliable across WebViews)
   useEffect(() => {
@@ -728,7 +907,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       });
     };
 
-    const handlePointerUp = (e: PointerEvent) => {
+    const handlePointerUp = async (e: PointerEvent) => {
       if (draggingRecord.isDragging) {
         const canvas = canvasRef.current;
         if (canvas) {
@@ -748,6 +927,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         }
       } else {
         if (onSelectRecord) {
+          await handleSaveProject();
           onSelectRecord(draggingRecord.item);
         }
       }
@@ -760,7 +940,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [draggingRecord, insertImageOverlay, onSelectRecord]);
+  }, [draggingRecord, insertImageOverlay, onSelectRecord, handleSaveProject]);
 
   // Global Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+C, Ctrl+V, Delete)
   useEffect(() => {
@@ -803,7 +983,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         handleZoomOut();
       } else if (e.ctrlKey && e.key === "0") {
         e.preventDefault();
-        handleZoomReset();
+        handleFitToViewport();
       } else if (e.key === "Escape") {
         if (selectedId) setSelectedId(null);
         else if (isCropMode) {
@@ -830,7 +1010,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             const reader = new FileReader();
             reader.onload = (evt) => {
               const src = evt.target?.result as string;
-              if (src) insertImageOverlay(src);
+              if (src) setPendingPasteSrc(src);
             };
             reader.readAsDataURL(blob);
           }
@@ -858,6 +1038,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     handleExportImageAs,
     insertImageOverlay,
     pushState,
+    handleFitToViewport,
   ]);
 
   // 2. Render Canvas Frame
@@ -929,6 +1110,24 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     }
   }, [bgImage, canvasDim, objects, selectedId, isCropMode, isCropOutMode, cropRect, snapGuides, textBoxEditor]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || !bgImage) return;
+      const preview = document.createElement("canvas");
+      const scale = Math.min(240 / canvas.width, 160 / canvas.height);
+      preview.width = Math.max(1, Math.round(canvas.width * scale));
+      preview.height = Math.max(1, Math.round(canvas.height * scale));
+      const ctx = preview.getContext("2d");
+      if (!ctx) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "medium";
+      ctx.drawImage(canvas, 0, 0, preview.width, preview.height);
+      setLivePreviewSrc(preview.toDataURL("image/jpeg", 0.65));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [bgImage, canvasDim, objects]);
+
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -992,9 +1191,12 @@ export const EditorModal: React.FC<EditorModalProps> = ({
     // rectangle, ellipse, or highlight switches to Select so it can be edited.
     if (activeTool === "rect" || activeTool === "ellipse" || activeTool === "highlight") {
       const hit = [...objects].reverse().find((obj) => isPointInsideObject(x, y, obj));
-      if (hit && (hit.type === "rect" || hit.type === "ellipse" || hit.type === "highlight")) {
+      if (hit && (hit.type === "image" || hit.type === "rect" || hit.type === "ellipse" || hit.type === "highlight")) {
         setSelectedId(hit.id);
         setActiveTool("select");
+        isDraggingObjectRef.current = true;
+        dragStartPosRef.current = { x, y };
+        dragInitialObjRef.current = JSON.parse(JSON.stringify(hit));
         return;
       }
     }
@@ -1216,12 +1418,14 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       const initial = resizeInitialObjRef.current;
       const handle = activeHandleRef.current;
 
-      setObjects((prev) =>
-        prev.map((obj) => {
-          if (obj.id !== selectedId) return obj;
-          return resizeObjectFromOrigin(initial, handle, dx, dy);
-        })
-      );
+      setObjects((prev) => {
+        const next = prev.map((obj) => obj.id === selectedId ? resizeObjectFromOrigin(initial, handle, dx, dy) : obj);
+        const bounds = getObjectBoundingBox(next.find((obj) => obj.id === selectedId)!);
+        if (bounds.maxX > canvasDim.width || bounds.maxY > canvasDim.height) {
+          setCanvasDim(dim => ({ width: Math.max(dim.width, Math.ceil(bounds.maxX) + 40), height: Math.max(dim.height, Math.ceil(bounds.maxY) + 40) }));
+        }
+        return next;
+      });
       return;
     }
 
@@ -1285,12 +1489,17 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 
       setSnapGuides({ xLines: activeXLines, yLines: activeYLines });
 
-      setObjects((prev) =>
-        prev.map((obj) => {
-          if (obj.id !== selectedId) return obj;
-          return moveObjectFromOrigin(initial, dx, dy);
-        })
-      );
+      setObjects((prev) => {
+        const next = prev.map((obj) => obj.id === selectedId ? moveObjectFromOrigin(initial, dx, dy) : obj);
+        const moved = next.find((obj) => obj.id === selectedId);
+        if (moved) {
+          const bounds = getObjectBoundingBox(moved);
+          if (bounds.maxX > canvasDim.width || bounds.maxY > canvasDim.height) {
+            setCanvasDim(dim => ({ width: Math.max(dim.width, Math.ceil(bounds.maxX) + 40), height: Math.max(dim.height, Math.ceil(bounds.maxY) + 40) }));
+          }
+        }
+        return next;
+      });
       return;
     }
 
@@ -1341,14 +1550,18 @@ export const EditorModal: React.FC<EditorModalProps> = ({
       isResizingRef.current = false;
       activeHandleRef.current = null;
       resizeInitialObjRef.current = null;
-      pushState(objects);
+      const normalized = normalizeObjectsIntoCanvas(objects);
+      if (normalized !== objects) setObjects(normalized);
+      pushState(normalized, undefined, fitCanvasToContent(normalized));
       return;
     }
 
     if (isDraggingObjectRef.current) {
       isDraggingObjectRef.current = false;
       dragInitialObjRef.current = null;
-      pushState(objects);
+      const normalized = normalizeObjectsIntoCanvas(objects);
+      if (normalized !== objects) setObjects(normalized);
+      pushState(normalized, undefined, fitCanvasToContent(normalized));
       return;
     }
 
@@ -1991,22 +2204,6 @@ export const EditorModal: React.FC<EditorModalProps> = ({
             </div>
           )}
 
-          {selectedId && objects.some((o) => o.id === selectedId && o.type === "image") && (
-            <div className="flex items-center gap-0.5 bg-sky-950/40 p-0.5 rounded-lg border border-sky-500/30 animate-in fade-in" title="Chọn vị trí ảnh trên canvas">
-              <span className="px-1 text-[10px] text-sky-300">Vị trí</span>
-              {(["left", "center", "right"] as const).map((h) => (
-                <button key={h} onClick={() => handleAlignSelectedImage(h, "middle")} className="px-1.5 py-0.5 rounded text-[10px] text-sky-200 hover:bg-sky-500/20" title={`Căn ${h === "left" ? "trái" : h === "center" ? "giữa" : "phải"}`}>
-                  {h === "left" ? "←" : h === "center" ? "↔" : "→"}
-                </button>
-              ))}
-              {(["top", "middle", "bottom"] as const).map((v) => (
-                <button key={v} onClick={() => handleAlignSelectedImage("center", v)} className="px-1.5 py-0.5 rounded text-[10px] text-sky-200 hover:bg-sky-500/20" title={`Căn ${v === "top" ? "trên" : v === "middle" ? "giữa" : "dưới"}`}>
-                  {v === "top" ? "↑" : v === "middle" ? "↕" : "↓"}
-                </button>
-              ))}
-            </div>
-          )}
-
           <div className="h-5 w-px bg-zinc-800 mx-0.5" />
 
           {/* Delete Selected Item */}
@@ -2344,9 +2541,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={handleZoomReset}
+              onClick={handleFitToViewport}
               className="px-1 py-0.5 text-[10px] font-mono text-zinc-300 hover:text-white font-medium"
-              title="Reset Zoom to 100% (Ctrl 0)"
+              title="Fit canvas to viewport (Ctrl 0)"
             >
               {Math.round(zoomLevel * 100)}%
             </button>
@@ -2415,6 +2612,19 @@ export const EditorModal: React.FC<EditorModalProps> = ({
         onDrop={handleDropOnCanvas}
         className="flex-1 overflow-auto bg-zinc-950 flex items-center justify-center p-8 relative"
       >
+        {pendingPasteSrc && (
+          <div className="fixed top-16 right-4 z-40 rounded-xl border border-sky-500/50 bg-zinc-900/95 p-3 shadow-2xl">
+            <div className="mb-2 text-center text-xs font-semibold text-sky-200">Chọn vị trí ảnh dán</div>
+            <div className="grid grid-cols-2 gap-1">
+              {(["left", "right", "top", "bottom"] as const).map((position) => (
+                <button key={position} onClick={() => placePendingPaste(position)} className="h-8 min-w-24 rounded bg-zinc-800 px-2 text-xs text-zinc-200 hover:bg-sky-600">
+                  {position === "left" ? "← Trái" : position === "right" ? "Phải →" : position === "top" ? "↑ Trên" : "↓ Dưới"}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setPendingPasteSrc(null)} className="mt-2 w-full rounded bg-zinc-800 py-1 text-[10px] text-zinc-400 hover:text-white">Hủy</button>
+          </div>
+        )}
         {/* Floating Crop (Keep) Actions Banner */}
         {isCropMode && (
           <div className="absolute top-6 z-30 bg-zinc-900/95 border border-emerald-500/80 px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 animate-in slide-in-from-top-2">
@@ -2851,6 +3061,7 @@ export const EditorModal: React.FC<EditorModalProps> = ({
                   key={item.id}
                   item={item}
                   isActive={item.id === record.id}
+                  previewSrc={item.id === record.id ? livePreviewSrc : undefined}
                   onStartDrag={(rec, thumb, e) => {
                     setDraggingRecord({
                       item: rec,
@@ -2906,8 +3117,9 @@ export const EditorModal: React.FC<EditorModalProps> = ({
 const BottomThumbnailCard: React.FC<{
   item: CaptureRecord;
   isActive: boolean;
+  previewSrc?: string;
   onStartDrag: (item: CaptureRecord, thumbSrc: string, e: React.PointerEvent) => void;
-}> = ({ item, isActive, onStartDrag }) => {
+}> = ({ item, isActive, previewSrc, onStartDrag }) => {
   const [thumbSrc, setThumbSrc] = useState<string>("");
 
   useEffect(() => {
@@ -2942,7 +3154,7 @@ const BottomThumbnailCard: React.FC<{
     <div
       onPointerDown={(e) => {
         if (e.button === 0) {
-          onStartDrag(item, thumbSrc, e);
+          onStartDrag(item, previewSrc || thumbSrc, e);
         }
       }}
       className={`group relative flex-shrink-0 w-32 h-20 rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing transition-all select-none touch-none ${
@@ -2952,9 +3164,9 @@ const BottomThumbnailCard: React.FC<{
       }`}
       title="Click để chuyển ảnh • Kéo thả vào giữa vùng vẽ để ghép ảnh"
     >
-      {thumbSrc ? (
+      {previewSrc || thumbSrc ? (
         <img
-          src={thumbSrc}
+          src={previewSrc || thumbSrc}
           alt="Thumbnail"
           draggable={false}
           className="w-full h-full object-cover pointer-events-none select-none"

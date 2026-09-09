@@ -178,6 +178,18 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
         >
           <Pin className={`w-3 h-3 ${record.isPinned ? "fill-current" : ""}`} />
         </button>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(record.id);
+          }}
+          className="absolute top-2 right-10 z-20 rounded-md bg-red-600/90 p-1.5 text-white shadow-md hover:bg-red-500"
+          title="Xóa ảnh chụp"
+          aria-label="Xóa ảnh chụp"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Card Info Footer */}
@@ -190,16 +202,6 @@ export const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
           <span className="text-[10px] text-zinc-400">{formatTime(record.createdAt)}</span>
         </div>
 
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(record.id);
-          }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
-          title="Delete Capture"
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
       </div>
     </div>
   );
